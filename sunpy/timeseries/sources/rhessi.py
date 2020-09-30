@@ -8,11 +8,11 @@ from collections import OrderedDict
 import matplotlib.dates
 import matplotlib.pyplot as plt
 from pandas import DataFrame
+from sunkit_instruments import rhessi
 
 import astropy.units as u
 
 import sunpy.io
-from sunpy.instr import rhessi
 from sunpy.timeseries.timeseriesbase import GenericTimeSeries
 from sunpy.util.metadata import MetaDict
 from sunpy.visualization import peek_show

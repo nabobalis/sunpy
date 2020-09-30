@@ -7,9 +7,9 @@ from urllib.error import URLError
 from urllib.request import urlopen, urlretrieve
 
 from dateutil.rrule import MONTHLY, rrule
+from sunkit_instruments import rhessi
 
 from sunpy.extern.parse import parse
-from sunpy.instr import rhessi
 from sunpy.net.dataretriever import GenericClient, QueryResponse
 from sunpy.time import TimeRange, parse_time
 
