@@ -1,14 +1,19 @@
 from sunpy.net import Fido, attrs as a
-from sunpy.net.dataretriever.attrs.hinode import Channel
+from sunpy.net.dataretriever.attrs.hinode import SOTDetector, Channel
 
-fg = Fido.search(
-    a.Time("2011-02-15T00:00:00", "2011-02-15T12:00:00"),
-    a.Instrument("SOT-FG"),
-    a.Level(1),
+res = Fido.search(
+    a.Time("2011-12-14 00:00", "2011-12-14 06:00"),
+    a.Instrument("SOT"),
+    SOTDetector("FG"),
     Channel("Ca II H"),
+    a.Level(1),
 )
+print(res)
 
-files_fg = Fido.fetch(
-    fg,
-    path="data/hinode/{instrument}/{start_time:%Y%m%d}/{file}",
+res2 = Fido.search(
+    a.Time("2011-12-14 00:00", "2011-12-14 06:00"),
+    a.Instrument("SOT"),
+    SOTDetector("SP"),
+    a.Level("2.1"),
 )
+print(res2)
