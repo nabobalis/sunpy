@@ -1,0 +1,1 @@
+Added a Fido client for retrieving Hinode SOT SP and FG data for all levels from the two official data archives.
