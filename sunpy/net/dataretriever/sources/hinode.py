@@ -7,22 +7,32 @@ from sunpy.time import TimeRange
 __all__ = ['HinodeSOTFGClient', 'HinodeSOTSPClient']
 
 
-_ARCHIVE_URLS = (
-    'https://data.darts.isas.jaxa.jp/pub/hinode/sot/',
-    'https://sot.lmsal.com/data/sot/',
-)
-_SP_LEVEL_DIRS_MAP = {
-    '0': 'level0',
-    '1': 'level1hao',
-    '2': 'level2hao',
-    '2.1': 'level2.1hao',
+_ARCHIVE_URLS = {
+    'DARTS': 'https://data.darts.isas.jaxa.jp/pub/hinode/sot/',
+    'LMSAL': 'https://sot.lmsal.com/data/sot/',
 }
+
+
+def _get_archive_url(matchdict):
+    """
+    Defaults to DARTS unless LMSAL is the only provider selected.
+    """
+    providers = [p.upper() for p in matchdict.get('Provider', [])]
+    if providers == ['LMSAL']:
+        return _ARCHIVE_URLS['LMSAL']
+    return _ARCHIVE_URLS['DARTS']
+
 
 class HinodeSOTFGClient(GenericClient):
     """
-    Provides access to the Hinode Solar Optical Telescope (SOT)  Filtergraph (FG) data archive.
+    Provides access to the Hinode Solar Optical Telescope (SOT) Filtergraph (FG) data archive.
 
-    Hosted by the `Data ARchives and Transmission System (DARTS) archive <https://darts.isas.jaxa.jp/en>`__.
+    Data is available from two archives:
+
+    - `DARTS archive <https://darts.isas.jaxa.jp/en>`__ (default)
+    - `LMSAL archive <https://www.lmsal.com/solarsoft/hinode/doc/hinode_sot_analysis_guide.html>`__
+
+    Use ``a.Provider('LMSAL')`` to retrieve from LMSAL instead.
 
     Examples
     --------
@@ -43,8 +53,9 @@ class HinodeSOTFGClient(GenericClient):
     <BLANKLINE>
     """
     required = {a.Time, a.Instrument, a.Level, hattrs.SOTDetector}
-    pattern = (
-        "https://data.darts.isas.jaxa.jp/pub/hinode/sot/level{Level}/{{year:4d}}/{{month:2d}}/{{day:2d}}/FG/"
+    optional = {a.Source, a.Provider}
+    _pattern = (
+        "{archive}level{Level}/{{year:4d}}/{{month:2d}}/{{day:2d}}/FG/"
         "H{{hour:2d}}00/"
         "FG{{year:4d}}{{month:2d}}{{day:2d}}_"
         "{{hour:2d}}{{minute:2d}}{{second:2d}}.{{}}.fits"
@@ -61,51 +72,55 @@ class HinodeSOTFGClient(GenericClient):
         return {
             a.Instrument: [("SOT", "Hinode Solar Optical Telescope")],
             a.Source: [("Hinode", "Hinode / Solar-B")],
-            a.Provider: [("DARTS", "ISAS/JAXA DARTS archive")],
+            a.Provider: [("DARTS", "ISAS/JAXA DARTS archive"),
+                         ("LMSAL", "Lockheed Martin Solar and Astrophysics Laboratory")],
             a.Level: [("0", "Level 0"), ("1", "Level 1")],
             a.hinode.SOTDetector: [("FG", "Filtergraph")],
         }
 
     @property
     def info_url(self):
-        return _ARCHIVE_URLS[0]
-
-    def post_search_hook(self, exdict, matchdict):
-        rowdict = super().post_search_hook(exdict, matchdict)
-        return rowdict
+        return _ARCHIVE_URLS['DARTS']
 
     def search(self, *args, **kwargs):
         matchdict = self._get_match_dict(*args, **kwargs)
         level = str(matchdict['Level'][0])
         if level not in ['0', '1']:
             return QueryResponse([], client=self)
-        formatted_pattern = self.pattern.replace('{Level}', level)
-        patterns = [formatted_pattern, formatted_pattern.replace(_ARCHIVE_URLS[0], _ARCHIVE_URLS[1])]
+        archive_url = _get_archive_url(matchdict)
+        pat = self._pattern.replace('{archive}', archive_url).replace('{Level}', level)
         tr = TimeRange(matchdict['Start Time'], matchdict['End Time'])
         rows = []
-        seen_urls = set()
-        for pat in patterns:
-            scraper = Scraper(format=pat)
-            try:
-                filemeta = scraper._extract_files_meta(tr, matcher=matchdict)
-            except Exception:
-                filemeta = []
-            for i in filemeta:
-                url = i.get('url', '')
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    rows.append(self.post_search_hook(i, matchdict))
-            if filemeta:
-                break
+        scraper = Scraper(format=pat)
+        try:
+            filemeta = scraper._extract_files_meta(tr, matcher=matchdict)
+        except Exception:
+            filemeta = []
+        for i in filemeta:
+            if i.get('url'):
+                rows.append(self.post_search_hook(i, matchdict))
         rows.sort(key=lambda x: x['Start Time'])
         return QueryResponse(rows, client=self)
 
 
 class HinodeSOTSPClient(GenericClient):
     """
-    Provides access to the Hinode Solar Optical Telescope (SOT)  Spectral-polarimeter (SP) data archive.
+    Provides access to the Hinode Solar Optical Telescope (SOT) Spectral-polarimeter (SP) data archive.
 
-    Hosted by the `Data ARchives and Transmission System (DARTS) archive <https://darts.isas.jaxa.jp/en>`__.
+    Data is available from two archives:
+
+    - `DARTS archive <https://darts.isas.jaxa.jp/en>`__ (default)
+    - `LMSAL archive <https://www.lmsal.com/solarsoft/hinode/doc/hinode_sot_analysis_guide.html>`__
+
+    Use ``a.Provider('LMSAL')`` to retrieve from LMSAL instead.
+
+    .. note::
+
+        Level 1 observations are grouped by observation start time in directories .
+        Each directory can contain hundreds of individual scan files spanning a time range longer
+        than the observation start time. As the scraper uses the directory timestamp for all files
+        within it, all returned level 1 results will share the same observation start time.
+        A search must include the observation start time in its time range to find level 1 files.
 
     Examples
     --------
@@ -128,18 +143,28 @@ class HinodeSOTSPClient(GenericClient):
     <BLANKLINE>
     """
     required = {a.Time, a.Instrument, a.Level, hattrs.SOTDetector}
-
-    # Pattern for level 0 data
-    pattern_level0 = (
-        "https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/{{year:4d}}/{{month:2d}}/{{day:2d}}/SP4D/H{{hour:2d}}00/"
-        "SP4D{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}.{{}}.fits"
-    )
-    # Pattern for level 1, 2, 2.1 data
-    pattern_other = (
-        "https://data.darts.isas.jaxa.jp/pub/hinode/sot/{{level_dir}}/{{year:4d}}/{{month:2d}}/{{day:2d}}/SP3D/"
-        "{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}/"
-        "SP3D{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}_{{}}.fits"
-    )
+    optional = {a.Source, a.Provider}
+    _patterns = {
+        '0': (
+            "{archive}level0/{{year:4d}}/{{month:2d}}/{{day:2d}}/SP4D/H{{hour:2d}}00/"
+            "SP4D{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}.{{}}.fits"
+        ),
+        '1': (
+            "{archive}level1hao/{{year:4d}}/{{month:2d}}/{{day:2d}}/SP3D/"
+            "{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}/"
+            "SP3D{{}}.fits"
+        ),
+        '2': (
+            "{archive}level2hao/{{year:4d}}/{{month:2d}}/{{day:2d}}/SP3D/"
+            "{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}/"
+            "{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}.fits"
+        ),
+        '2.1': (
+            "{archive}level2.1hao/{{year:4d}}/{{month:2d}}/{{day:2d}}/SP3D/"
+            "{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}/"
+            "{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}_L2.1.fits"
+        ),
+    }
 
     @classmethod
     def _attrs_module(cls):
@@ -152,45 +177,41 @@ class HinodeSOTSPClient(GenericClient):
         return {
             a.Instrument: [("SOT", "Hinode Solar Optical Telescope")],
             a.Source: [("Hinode", "Hinode / Solar-B")],
-            a.Provider: [("DARTS", "ISAS/JAXA DARTS archive")],
+            a.Provider: [("DARTS", "ISAS/JAXA DARTS archive"),
+                         ("LMSAL", "Lockheed Martin Solar and Astrophysics Laboratory")],
             a.Level: [("0", "Level 0"), ("1", "Level 1"), ("2", "Level 2"), ("2.1", "Level 2.1")],
             a.hinode.SOTDetector: [("SP", "Spectro-Polarimeter")],
         }
 
     @property
     def info_url(self):
-        return _ARCHIVE_URLS[0]
+        return _ARCHIVE_URLS['DARTS']
 
     def post_search_hook(self, exdict, matchdict):
         rowdict = super().post_search_hook(exdict, matchdict)
         rowdict['End Time'] = rowdict['Start Time']
         rowdict['Source'] = 'Hinode'
-        rowdict['Provider'] = 'DARTS'
+        providers = [p.upper() for p in matchdict.get('Provider', [])]
+        rowdict['Provider'] = 'LMSAL' if providers == ['LMSAL'] else 'DARTS'
         return rowdict
 
     def search(self, *args, **kwargs):
         matchdict = self._get_match_dict(*args, **kwargs)
         level = str(matchdict['Level'][0])
-        level_dir = _SP_LEVEL_DIRS_MAP[level]
-        if level == '0':
-            patterns = [self.pattern_level0, self.pattern_level0.replace(_ARCHIVE_URLS[0], _ARCHIVE_URLS[1])]
-        else:
-            patterns = [self.pattern_other, self.pattern_other.replace(_ARCHIVE_URLS[0], _ARCHIVE_URLS[1])]
+        pattern_template = self._patterns.get(level)
+        if pattern_template is None:
+            return QueryResponse([], client=self)
+        archive_url = _get_archive_url(matchdict)
+        pattern = pattern_template.replace('{archive}', archive_url)
         tr = TimeRange(matchdict['Start Time'], matchdict['End Time'])
         rows = []
-        seen_urls = set()
-        for pat in patterns:
-            scraper = Scraper(format=pat, level_dir=level_dir)
-            try:
-                filemeta = scraper._extract_files_meta(tr, matcher=matchdict)
-            except Exception:
-                filemeta = []
-            for i in filemeta:
-                url = i.get('url', '')
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    rows.append(self.post_search_hook(i, matchdict))
-            if filemeta:
-                break
+        scraper = Scraper(format=pattern)
+        try:
+            filemeta = scraper._extract_files_meta(tr, matcher=matchdict)
+        except Exception:
+            filemeta = []
+        for i in filemeta:
+            if i.get('url'):
+                rows.append(self.post_search_hook(i, matchdict))
         rows.sort(key=lambda x: x['Start Time'])
         return QueryResponse(rows, client=self)

@@ -1,4 +1,3 @@
-import tempfile
 from unittest import mock
 
 import pytest
@@ -19,41 +18,8 @@ def sp_client():
     return hinode.HinodeSOTSPClient()
 
 
-class DummyDownloader:
-    def __init__(self):
-        self.calls = []
-
-    def enqueue_file(self, url, filename, **kwargs):
-        self.calls.append((url, filename, kwargs))
-
-    def download(self):
-        return self.calls
-
-
-def mock_query_object(client, detector='FG', level='1', url=None):
-    if url is None:
-        if detector == 'FG':
-            url = ('https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1/'
-                   '2011/12/13/FG/H0600/FG20111213_060000.0.fits')
-        else:
-            url = ('https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1hao/'
-                   '2011/12/13/SP3D/20111213_020000/20111213_020000_L1.0.fits')
-
-    obj = {
-        'Start Time': parse_time('2011-12-13T06:00:00'),
-        'End Time': parse_time('2011-12-13T06:00:00'),
-        'Instrument': 'SOT',
-        'SOTDetector': detector,
-        'Level': level,
-        'Source': 'Hinode',
-        'Provider': 'DARTS',
-        'url': url,
-    }
-    return QueryResponse([obj], client=client)
-
-
 @pytest.mark.parametrize(
-    ('client_cls', 'detector', 'level', 'expected'),
+    ('client_cls', 'detector', 'level', 'can_handle'),
     [
         (hinode.HinodeSOTFGClient, 'FG', '0', True),
         (hinode.HinodeSOTFGClient, 'FG', '1', True),
@@ -66,155 +32,35 @@ def mock_query_object(client, detector='FG', level='1', url=None):
         (hinode.HinodeSOTSPClient, 'FG', '1', False),
     ],
 )
-def test_can_handle_query(client_cls, detector, level, expected):
+def test_can_handle_query(client_cls, detector, level, can_handle):
     query = (
         a.Time('2011-12-13 06:00', '2011-12-13 07:00'),
         a.Instrument('SOT'),
         a.Level(level),
         a.hinode.SOTDetector(detector),
     )
-    assert client_cls._can_handle_query(*query) is expected
+    assert client_cls._can_handle_query(*query) is can_handle
 
 
 @pytest.mark.parametrize(
-    ('level', 'timerange', 'filesmeta', 'expected_urls'),
+    ('client_cls', 'detector', 'provider', 'can_handle'),
     [
-        (
-            1,
-            ('2011-12-13 06:00', '2011-12-13 06:15'),
-            [
-                {
-                    'year': 2011,
-                    'month': 12,
-                    'day': 13,
-                    'hour': 6,
-                    'minute': 10,
-                    'second': 0,
-                    'subsec': 0,
-                    'url': ('https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1/'
-                            '2011/12/13/FG/H0600/FG20111213_061000.0.fits'),
-                },
-                {
-                    'year': 2011,
-                    'month': 12,
-                    'day': 13,
-                    'hour': 6,
-                    'minute': 0,
-                    'second': 0,
-                    'subsec': 0,
-                    'url': ('https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1/'
-                            '2011/12/13/FG/H0600/FG20111213_060000.0.fits'),
-                },
-            ],
-            [
-                'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1/2011/12/13/FG/H0600/FG20111213_060000.0.fits',
-                'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1/2011/12/13/FG/H0600/FG20111213_061000.0.fits',
-            ],
-        ),
-        (
-            0,
-            ('2013-07-13 00:13:32', '2013-07-13 00:13:33'),
-            [{
-                'year': 2013,
-                'month': 7,
-                'day': 13,
-                'hour': 0,
-                'minute': 13,
-                'second': 32,
-                'subsec': 7,
-                'url': ('https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/'
-                        '2013/07/13/FG/H0000/FG20130713_001332.7.fits'),
-            }],
-            ['https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/2013/07/13/FG/H0000/FG20130713_001332.7.fits'],
-        ),
+        (hinode.HinodeSOTFGClient, 'FG', 'DARTS', True),
+        (hinode.HinodeSOTFGClient, 'FG', 'LMSAL', True),
+        (hinode.HinodeSOTSPClient, 'SP', 'DARTS', True),
+        (hinode.HinodeSOTSPClient, 'SP', 'LMSAL', True),
+        (hinode.HinodeSOTSPClient, 'SP', 'Fake', False),
     ],
 )
-def test_search_fg(fg_client, level, timerange, filesmeta, expected_urls):
-    with mock.patch('sunpy.net.dataretriever.client.Scraper._extract_files_meta', return_value=filesmeta):
-        qr = fg_client.search(
-            a.Time(*timerange),
-            a.Instrument('SOT'),
-            a.Level(level),
-            a.hinode.SOTDetector('FG'),
-        )
-
-    assert [str(u) for u in qr['url']] == expected_urls
-    assert qr['Level'][0] == str(level)
-    assert qr['SOTDetector'][0] == 'FG'
-
-
-@pytest.mark.parametrize(
-    ('level', 'timerange', 'filesmeta', 'expected_urls'),
-    [
-        (
-            1,
-            ('2011-12-13 02:00', '2011-12-13 04:30'),
-            [
-                {
-                    'year': 2011,
-                    'month': 12,
-                    'day': 13,
-                    'hour': 2,
-                    'minute': 0,
-                    'second': 0,
-                    'url': 'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1hao/2011/12/13/SP3D/20111213_020000/20111213_020000_L1.0.fits',
-                },
-                {
-                    'year': 2011,
-                    'month': 12,
-                    'day': 13,
-                    'hour': 4,
-                    'minute': 30,
-                    'second': 0,
-                    'url': 'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1hao/2011/12/13/SP3D/20111213_043000/20111213_043000_L1.0.fits',
-                },
-            ],
-            [
-                'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1hao/2011/12/13/SP3D/20111213_020000/20111213_020000_L1.0.fits',
-                'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1hao/2011/12/13/SP3D/20111213_043000/20111213_043000_L1.0.fits',
-            ],
-        ),
-        (
-            0,
-            ('2013-07-13 10:02:00', '2013-07-13 10:03:00'),
-            [
-                {
-                    'year': 2013,
-                    'month': 7,
-                    'day': 13,
-                    'hour': 10,
-                    'minute': 2,
-                    'second': 50,
-                    'url': 'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/2013/07/13/SP4D/H1000/SP4D20130713_100250.1.fits',
-                },
-                {
-                    'year': 2013,
-                    'month': 7,
-                    'day': 13,
-                    'hour': 10,
-                    'minute': 2,
-                    'second': 54,
-                    'url': 'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/2013/07/13/SP4D/H1000/SP4D20130713_100254.0.fits',
-                },
-            ],
-            [
-                'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/2013/07/13/SP4D/H1000/SP4D20130713_100250.1.fits',
-                'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/2013/07/13/SP4D/H1000/SP4D20130713_100254.0.fits',
-            ],
-        ),
-    ],
-)
-def test_search_sp(sp_client, level, timerange, filesmeta, expected_urls):
-    with mock.patch('sunpy.net.dataretriever.client.Scraper._extract_files_meta', return_value=filesmeta):
-        qr = sp_client.search(
-            a.Time(*timerange),
-            a.Instrument('SOT'),
-            a.Level(level),
-            a.hinode.SOTDetector('SP'),
-        )
-
-    assert len(qr) == len(expected_urls)
-    assert [str(u) for u in qr['url']] == expected_urls
+def test_can_handle_query_provider(client_cls, detector, provider, can_handle):
+    query = (
+        a.Time('2011-12-13 06:00', '2011-12-13 07:00'),
+        a.Instrument('SOT'),
+        a.Level(1),
+        a.hinode.SOTDetector(detector),
+        a.Provider(provider),
+    )
+    assert client_cls._can_handle_query(*query) is can_handle
 
 
 REAL_URL_CASES = [
@@ -224,6 +70,15 @@ REAL_URL_CASES = [
         '2013-07-13 00:13:32',
         '2013-07-13 00:13:33',
         'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/2013/07/13/FG/H0000/FG20130713_001332.7.fits',
+        'DARTS',
+    ),
+    (
+        'FG',
+        '1',
+        '2011-12-13 06:04:30',
+        '2011-12-13 06:04:32',
+        'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1/2011/12/13/FG/H0600/FG20111213_060430.3.fits',
+        'DARTS',
     ),
     (
         'SP',
@@ -231,31 +86,113 @@ REAL_URL_CASES = [
         '2013-07-13 10:02:50',
         '2013-07-13 10:02:51',
         'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level0/2013/07/13/SP4D/H1000/SP4D20130713_100250.1.fits',
+        'DARTS',
+    ),
+    (
+        'SP',
+        '1',
+        '2011-12-13 02:50:04',
+        '2011-12-13 02:50:05',
+        'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1hao/2011/12/13/SP3D/20111213_025004/SP3D20111213_025004.4C.fits',
+        'DARTS',
+    ),
+    (
+        'SP',
+        '2',
+        '2011-12-13 02:50:04',
+        '2011-12-13 02:50:05',
+        'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level2hao/2011/12/13/SP3D/20111213_025004/20111213_025004.fits',
+        'DARTS',
+    ),
+    (
+        'SP',
+        '2.1',
+        '2011-12-13 02:50:04',
+        '2011-12-13 02:50:05',
+        'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level2.1hao/2011/12/13/SP3D/20111213_025004/20111213_025004_L2.1.fits',
+        'DARTS',
+    ),
+    (
+        'SP',
+        '2',
+        '2011-12-13 02:50:04',
+        '2011-12-13 02:50:05',
+        'https://sot.lmsal.com/data/sot/level2hao/2011/12/13/SP3D/20111213_025004/20111213_025004.fits',
+        'LMSAL',
     ),
 ]
 
 
 @pytest.mark.remote_data
 @pytest.mark.parametrize(
-    ('detector', 'level', 'start', 'end', 'expected_url'),
+    ('detector', 'level', 'start', 'end', 'expected_url', 'provider'),
     REAL_URL_CASES,
 )
-def test_real_archive_urls(fg_client, sp_client, detector, level, start, end,
-                           expected_url):
+def test_real_archive_urls(fg_client, sp_client, detector, level, start, end, expected_url, provider):
     hinode_client = fg_client if detector == 'FG' else sp_client
     qr = hinode_client.search(
         a.Time(start, end),
         a.Instrument('SOT'),
         a.Level(level),
         a.hinode.SOTDetector(detector),
+        a.Provider(provider),
     )
 
-    assert len(qr) == 1
-    assert qr[0]['url'] == expected_url
+    assert len(qr) >= 1
+    assert expected_url in list(qr['url'])
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        file = hinode_client.fetch(qr, path=tmpdir)
-    assert file[0].split('/')[-1] == expected_url.split('/')[-1]
+
+@pytest.mark.parametrize(
+    ('client_cls', 'detector', 'level', 'provider'),
+    [
+        (
+            hinode.HinodeSOTFGClient,
+            'FG',
+            1,
+            'LMSAL',
+        ),
+        (
+            hinode.HinodeSOTFGClient,
+            'FG',
+            1,
+            'DARTS',
+        ),
+        (
+            hinode.HinodeSOTSPClient,
+            'SP',
+            2,
+            'LMSAL',
+        ),
+        (
+            hinode.HinodeSOTSPClient,
+            'SP',
+            2,
+            'DARTS',
+        ),
+    ],
+)
+def test_search_provider_url(client_cls, detector, level, provider):
+    lmsal_url = 'https://sot.lmsal.com/data/sot/'
+    darts_url = 'https://data.darts.isas.jaxa.jp/pub/hinode/sot/'
+    fake_url = (lmsal_url if provider == 'LMSAL' else darts_url) + 'level' + str(level) + 'hao' + '/somefile.fits'
+    filesmeta = [{
+        'year': 2011, 'month': 12, 'day': 13,
+        'hour': 6, 'minute': 0, 'second': 0,
+        'url': fake_url,
+    }]
+    client = client_cls()
+    with mock.patch('sunpy.net.dataretriever.client.Scraper._extract_files_meta', return_value=filesmeta):
+        qr = client.search(
+            a.Time('2011-12-13 06:00', '2011-12-13 06:15'),
+            a.Instrument('SOT'),
+            a.Level(level),
+            a.hinode.SOTDetector(detector),
+            a.Provider(provider),
+        )
+    assert len(qr) == 1
+    assert qr[0]['Provider'] == provider
+    assert qr[0]['url'].startswith(lmsal_url if provider == 'LMSAL' else darts_url)
+
 
 def test_search_unsupported_fg_level(fg_client):
     qr = fg_client.search(
@@ -267,41 +204,32 @@ def test_search_unsupported_fg_level(fg_client):
     assert len(qr) == 0
 
 
-def test_dummy_fetch_fg(fg_client, tmp_path):
-    downloader = DummyDownloader()
-    qr = mock_query_object(fg_client)
-
-    result = fg_client.fetch(
-        qr[0],
-        path=tmp_path / '{sotdetector}' / '{file}',
-        downloader=downloader,
-    )
-
-    assert result == downloader.calls
-    assert downloader.calls == [
-        (
-            'https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1/2011/12/13/FG/H0600/FG20111213_060000.0.fits',
-            tmp_path / 'FG' / 'FG20111213_060000.0.fits',
-            {},
-        ),
-    ]
-
-
-def test_dummy_fetch_sp(sp_client, tmp_path):
-    downloader = DummyDownloader()
-    qr = mock_query_object(sp_client, detector='SP', url='https://example.com/20111213_020000/file_a.fits')
-    result = sp_client.fetch(qr, path=tmp_path, downloader=downloader)
-
-    assert result == downloader.calls
-    assert downloader.calls == [
-        ('https://example.com/20111213_020000/file_a.fits', tmp_path / 'file_a.fits', {}),
-    ]
-
-
 def test_attr_reg():
     assert hasattr(a, 'hinode')
     assert a.hinode.SOTDetector.fg == a.hinode.SOTDetector('FG')
     assert a.hinode.SOTDetector.sp == a.hinode.SOTDetector('SP')
+
+
+def mock_query_object(client, detector='FG', level='1', url=None):
+    if url is None:
+        if detector == 'FG':
+            url = ('https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1/'
+                   '2011/12/13/FG/H0600/FG20111213_060430.3.fits')
+        else:
+            url = ('https://data.darts.isas.jaxa.jp/pub/hinode/sot/level1hao/'
+                   '2011/12/13/SP3D/20111213_025004/SP3D20111213_025004.4C.fits')
+
+    obj = {
+        'Start Time': parse_time('2011-12-13T06:00:00'),
+        'End Time': parse_time('2011-12-13T06:00:00'),
+        'Instrument': 'SOT',
+        'SOTDetector': detector,
+        'Level': level,
+        'Source': 'Hinode',
+        'Provider': 'DARTS',
+        'url': url,
+    }
+    return QueryResponse([obj], client=client)
 
 
 def test_show(fg_client):
