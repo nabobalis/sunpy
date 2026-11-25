@@ -357,3 +357,10 @@ def test_filelist_day_of_year():
     listing = ''.join(f'<a href="f_2020{day:03d}.fits"></a>' for day in (1, 100, 300)).encode()
     with patch('sunpy.net.scraper.urlopen', return_value=io.BytesIO(listing)):
         assert s.filelist(TimeRange('2020-04-09', '2020-04-09 12:00')) == ['https://x.org/2020/f_2020100.fits']
+
+
+def test_week_number(tmp_path):
+    for week in ('00', '01', '02'):
+        (tmp_path / f'f_2020_{week}.txt').touch()
+    s = Scraper(format=tmp_path.as_uri() + '/f_{{year:4d}}_{{week_number:2d}}.txt')
+    assert s.filelist(TimeRange('2020-01-07', '2020-01-08')) == [tmp_path.as_uri() + '/f_2020_01.txt']

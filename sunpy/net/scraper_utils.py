@@ -112,11 +112,17 @@ def get_timerange_from_exdict(exdict):
     if 'day_of_year' in exdict:
         date = datetime(int(exdict.get('year', 1)), 1, 1) + timedelta(days=int(exdict['day_of_year']) - 1)
         exdict['month'], exdict['day'] = date.month, date.day
+    if 'week_number' in exdict and 'year' in exdict and 'day' not in exdict:
+        # The weeks of strftime's %W: they start on a Monday and stay within their year.
+        year = int(exdict['year'])
+        monday = datetime.strptime(f"{year} {int(exdict['week_number'])} 1", '%Y %W %w')
+        start, end = max(monday, datetime(year, 1, 1)), min(monday + timedelta(days=7), datetime(year + 1, 1, 1))
+        return TimeRange(start, end - TIME_QUANTITIES['millisecond'])
     datetypes = ['year', 'month', 'day']
-    timetypes = ['hour', 'minute', 'second', 'millisecond']
+    timetypes = ['hour', 'minute', 'second']
     dtlist = [int(exdict.get(d, 1)) for d in datetypes]
     dtlist.extend([int(exdict.get(t, 0)) for t in timetypes])
-    startTime = datetime(*dtlist)
+    startTime = datetime(*dtlist, 1000*int(exdict.get('millisecond', 0)) + int(exdict.get('microsecond', 0)))
     tdelta = TIME_QUANTITIES['millisecond']
     if "second" in exdict:
         tdelta = TIME_QUANTITIES['second']
