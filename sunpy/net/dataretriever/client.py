@@ -73,7 +73,7 @@ class GenericClient(BaseClient):
         Constructs a dictionary using the query and registered Attrs that represents
         all possible values of the extracted metadata for files that matches the query.
         The returned dictionary is used to validate the metadata of searched files
-        in :func:`~sunpy.net.scraper.Scraper._extract_files_meta`.
+        in :func:`~sunpy.net.scraper.Scraper.extract_files_meta`.
 
         Parameters
         ----------

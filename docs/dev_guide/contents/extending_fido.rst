@@ -129,7 +129,7 @@ A good example of the use of these two methods is the `sunpy.net.dataretriever.s
 
 Attrs other than Time can also be part of the directories in ``pattern``, written in the same way as in the filename, for example ``level{{Level}}/{{year:4d}}/``.
 Only the directories whose values match the query are searched.
-If the URLs can not be described by a single ``pattern``, the :meth:`~sunpy.net.dataretriever.client.GenericClient.search` needs to be customized to use a `~sunpy.net.scraper.Scraper` for each pattern.
+If the URLs can not be described by a single ``pattern``, the :meth:`~sunpy.net.dataretriever.client.GenericClient.search` needs to be customized to call :meth:`~sunpy.net.scraper.Scraper.extract_files_meta` for each pattern.
 For an example of a complex modification of the ``search()`` method see the implementation of `.SUVIClient.search`.
 
 Customizing the Downloader

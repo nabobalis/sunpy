@@ -130,7 +130,7 @@ class XRSClient(GenericClient):
         metalist = []
         scraper = Scraper(format=pattern, **kwargs)
         tr = TimeRange(matchdict["Start Time"], matchdict["End Time"])
-        filemeta = scraper._extract_files_meta(tr, matcher=matchdict)
+        filemeta = scraper.extract_files_meta(tr, matcher=matchdict)
         for i in filemeta:
             rowdict = self.post_search_hook(i, matchdict)
             rowdict.update(kwargs)
@@ -300,7 +300,7 @@ class SUVIClient(GenericClient):
                     urlpattern = urlpattern.replace('{', '{{').replace('}', '}}')
                     scraper = Scraper(format=urlpattern)
                     tr = TimeRange(matchdict['Start Time'], matchdict['End Time'])
-                    filesmeta = scraper._extract_files_meta(tr)
+                    filesmeta = scraper.extract_files_meta(tr)
                     for i in filesmeta:
                         rowdict = self.post_search_hook(i, matchdict)
                         rowdict['SatelliteNumber'] = satno

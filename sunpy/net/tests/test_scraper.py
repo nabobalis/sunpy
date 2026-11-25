@@ -230,11 +230,14 @@ def test_filelist_relative_hrefs():
 
 @pytest.mark.remote_data
 def test_extract_files_meta():
+    # The private name is kept for code written before the method was public.
+    assert Scraper._extract_files_meta is Scraper.extract_files_meta
+
     pattern0 = 'https://solar.nro.nao.ac.jp/norh/data/tcx/{{year:4d}}/{{month:2d}}/{{wave}}{{year:2d}}{{month:2d}}{{day:2d}}'
     s0 = Scraper(format=pattern0)
     timerange0 = TimeRange('2020/1/1 4:00', '2020/1/2')
     matchdict = {'wave': ['tca', 'tcz']}
-    metalist0 = s0._extract_files_meta(timerange0, matcher=matchdict)
+    metalist0 = s0.extract_files_meta(timerange0, matcher=matchdict)
     assert metalist0[0]['wave'] == 'tca'
     assert metalist0[3]['wave'] == 'tcz'
     # Files come back in time order, so both wavelengths of the first day come first.
@@ -244,7 +247,7 @@ def test_extract_files_meta():
                 '/mrzqs{{year:2d}}{{month:2d}}{{day:2d}}t{{hour:2d}}{{minute:2d}}c{{CAR_ROT:4d}}_{{:3d}}.fits.gz')
     s1 = Scraper(format=pattern1)
     timerange1 = TimeRange('2020-01-05', '2020-01-05T16:00:00')
-    metalist1 = s1._extract_files_meta(timerange1)
+    metalist1 = s1.extract_files_meta(timerange1)
     urls = s1.filelist(timerange1)
     assert metalist1[3]['CAR_ROT'] == 2226
     assert metalist1[-1]['url'] == urls[-1]
@@ -361,7 +364,7 @@ def test_local_expected_directory_doesnt_exist(tmp_path):
         file.write('')
     s = Scraper(format='/'.join([tmp_path.as_uri(), '{{year:4d}}', '{{month:2d}}', '{{day:2d}}', '{{file}}']))
     files = s.filelist(TimeRange("2025-01-01", "2025-01-02"))
-    meta = s._extract_files_meta(TimeRange("2025-01-01", "2025-01-02"))
+    meta = s.extract_files_meta(TimeRange("2025-01-01", "2025-01-02"))
     assert len(files) == 1
     assert len(meta) == 1
 
@@ -420,7 +423,7 @@ def test_fine_directories(archive):
          '2020/01/02/20200102_010000/a.fits')
     s = Scraper(format=url + '{{year:4d}}/{{month:2d}}/{{day:2d}}/'
                 '{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}/{{name}}.fits')
-    meta = s._extract_files_meta(TimeRange('2020-01-01', '2020-01-01 12:00'))
+    meta = s.extract_files_meta(TimeRange('2020-01-01', '2020-01-01 12:00'))
     assert [(m['hour'], m['name']) for m in meta] == [(2, 'a'), (2, 'b'), (6, 'a')]
     # One listing for the day and one for each scan found in it, not one for every second.
     assert len(requested) == 3
@@ -430,7 +433,7 @@ def test_directory_field(archive):
     fill, url, requested = archive
     fill('level0/2020/f_20200101.fits', 'level1/2020/f_20200101.fits', 'level1hao/2020/f_20200101.fits')
     s = Scraper(format=url + 'level{{Level}}/{{year:4d}}/f_{{year:4d}}{{month:2d}}{{day:2d}}.fits')
-    meta = s._extract_files_meta(TimeRange('2020-01-01', '2020-01-02'), matcher={'Level': ['1']})
+    meta = s.extract_files_meta(TimeRange('2020-01-01', '2020-01-02'), matcher={'Level': ['1']})
     assert meta == [{'Level': '1', 'year': 2020, 'month': 1, 'day': 1, 'url': url + 'level1/2020/f_20200101.fits'}]
     assert sorted(requested) == ['/', '/level1/2020/']
 

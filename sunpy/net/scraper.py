@@ -216,7 +216,7 @@ class Scraper:
         ['https://proba2.sidc.be/lyra/data/bsd/2023/03/06/lyra_20230306-000000_lev2_std.fits',
         'https://proba2.sidc.be/lyra/data/bsd/2023/03/06/lyra_20230306-000000_lev3_std.fits']
         """
-        return [meta['url'] for meta in self._extract_files_meta(timerange)]
+        return [meta['url'] for meta in self.extract_files_meta(timerange)]
 
     def _search(self, timerange, matcher=None):
         """
@@ -336,24 +336,37 @@ class Scraper:
                  for entry in entries}
         return sorted(name for name in names if name not in ('', '.', '..') and '/' not in name), None
 
-    def _extract_files_meta(self, timerange, matcher=None):
+    def extract_files_meta(self, timerange, matcher=None):
         """
-        Returns metadata information contained in URLs.
+        Returns the metadata held in the URL of each file in the archive for the given time range.
 
         Parameters
         ----------
         timerange : `~sunpy.time.TimeRange`
-            Time interval where to find the directories for a given pattern.
+            Time interval to search.
         matcher : `dict`, optional
-            Dictionary to check if extracted metadata is valid.
-            Defaults to None.
+            The values allowed for fields in the pattern, as a list of strings for each field name.
+            Defaults to `None`, which allows every value.
 
         Returns
         -------
         `list` of `dict`
-            List of metadata info for all URLs.
+            For each file, the value of every named field in the pattern and the file's ``url``.
+
+        Examples
+        --------
+        >>> from sunpy.net import Scraper
+        >>> from sunpy.time import TimeRange
+        >>> pattern = 'https://proba2.sidc.be/lyra/data/bsd/{{year:4d}}/{{month:2d}}/{{day:2d}}/{{}}_lev{{Level:1d}}_std.fits'
+        >>> lyra = Scraper(pattern)
+        >>> timerange = TimeRange('2023-03-06T00:00:00','2023-03-06T00:10:00')
+        >>> lyra.extract_files_meta(timerange, matcher={'Level': ['3']})  # doctest: +REMOTE_DATA
+        [{'year': 2023, 'month': 3, 'day': 6, 'Level': 3, 'url': 'https://proba2.sidc.be/lyra/data/bsd/2023/03/06/lyra_20230306-000000_lev3_std.fits'}]
         """
         files, errors = self._search(timerange, matcher)
         if errors:
             raise errors[0]
         return files
+
+    # The name this method had before it was public.
+    _extract_files_meta = extract_files_meta
