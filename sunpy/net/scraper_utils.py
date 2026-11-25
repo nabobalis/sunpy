@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
 from sunpy.time import TimeRange
+from sunpy.util.decorators import deprecated
 
 __all__ = ["extract_timestep", "date_floor", "get_timerange_from_exdict"]
 
@@ -16,6 +17,7 @@ TIME_QUANTITIES = {
 }
 
 
+@deprecated(since="8.1")
 def extract_timestep(directoryPattern):
     """
     Obtain the smallest time step for the given pattern.
@@ -46,6 +48,7 @@ def extract_timestep(directoryPattern):
         return None
 
 
+@deprecated(since="8.1")
 def date_floor(date, timestep):
     """
     Return the "floor" of the given date and timestep.

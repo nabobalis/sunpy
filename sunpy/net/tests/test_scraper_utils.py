@@ -5,6 +5,7 @@ from dateutil.relativedelta import relativedelta
 
 from sunpy.net.scraper_utils import date_floor, extract_timestep, get_timerange_from_exdict
 from sunpy.time import TimeRange, parse_time
+from sunpy.util.exceptions import SunpyDeprecationWarning
 
 DATETIME_PATTERN_EXAMPLES = [
     ('%b%y', relativedelta(months=1)),
@@ -13,6 +14,7 @@ DATETIME_PATTERN_EXAMPLES = [
     ('%y%b', relativedelta(months=1)),
 ]
 
+@pytest.mark.filterwarnings("ignore::sunpy.util.exceptions.SunpyDeprecationWarning")
 @pytest.mark.parametrize(('pattern', 'mintime'), DATETIME_PATTERN_EXAMPLES)
 def test_extract_timestep(pattern, mintime):
     assert mintime == extract_timestep(pattern)
@@ -43,6 +45,7 @@ def test_get_timerange_from_exdict(exdict, start, end):
     file_timerange = get_timerange_from_exdict(exdict)
     assert file_timerange == tr
 
+@pytest.mark.filterwarnings("ignore::sunpy.util.exceptions.SunpyDeprecationWarning")
 @pytest.mark.parametrize(('testdate', 'pattern', 'floor_val'), [
     ((2004, 3, 6), '%y', datetime(2004, 1, 1, 0, 0)),
     ((2004, 3, 6), '%b%y', datetime(2004, 3, 1, 0, 0)),
@@ -55,3 +58,10 @@ def test_date_floor(testdate, pattern, floor_val):
     date = parse_time(testdate)
     timestep = extract_timestep(pattern)
     assert date_floor(date, timestep) == floor_val
+
+
+def test_deprecations():
+    with pytest.warns(SunpyDeprecationWarning):
+        timestep = extract_timestep('%d%H')
+    with pytest.warns(SunpyDeprecationWarning):
+        date_floor(parse_time('2023-02-23'), timestep)

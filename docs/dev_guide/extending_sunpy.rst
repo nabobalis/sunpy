@@ -13,5 +13,4 @@ Extending sunpy
    contents/extending_fido
    contents/new_map_class
    contents/custom_map_rotate
-   contents/scraper_migration
    contents/soar/index

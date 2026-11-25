@@ -32,13 +32,6 @@ A new "scraper" client inherits from `~sunpy.net.dataretriever.client.GenericCli
   Single curly braces ``{}`` are only used for regular placeholders for Python format strings, each respective value passed as ``kwargs`` to the Scraper.
   An example of how such a pattern looks like is given in the algorithm explanation below.
 
-.. warning::
-
-    The scraper class has supported regex-based patterns for a long time
-    However, that is in the process of being replaced with parse-style patterns.
-    This is supported by the ``format`` keyword argument to the scraper.
-    The regex-style patterns have be deprecated and will be removed in the future.
-
 Each such client relies on the `~sunpy.net.scraper.Scraper` to be able to query for files using the :meth:`~sunpy.net.scraper.Scraper.filelist` method.
 
 The general algorithm to explain how the `~sunpy.net.scraper.Scraper` is able to do this is:

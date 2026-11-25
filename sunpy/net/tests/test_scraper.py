@@ -13,6 +13,10 @@ from sunpy.extern import parse
 from sunpy.net.scraper import Scraper
 from sunpy.net.scraper_utils import get_timerange_from_exdict
 from sunpy.time import TimeRange, parse_time
+from sunpy.util.exceptions import SunpyDeprecationWarning
+
+# For tests of deprecated methods, which have to keep working until they are removed.
+deprecated_api = pytest.mark.filterwarnings("ignore::sunpy.util.exceptions.SunpyDeprecationWarning")
 
 
 @pytest.fixture
@@ -45,6 +49,7 @@ def fake_fs(ls):
     return patch('sunpy.net.scraper.url_to_fs', return_value=(fs, None)), fs
 
 
+@deprecated_api
 def test_directory_date_pattern():
     s = Scraper(format='{{year:4d}}/{{month:2d}}/{{day:2d}}/{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}_59.fit.gz')
     testpath = '2014/03/05/20140305_013000_59.fit.gz'
@@ -52,6 +57,7 @@ def test_directory_date_pattern():
     assert s.matches(testpath, d)
 
 
+@deprecated_api
 def test_directory_date_patternFalse():
     s = Scraper(format='{{year:4d}}/{{month:2d}}/{{day:2d}}/{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}_59.fit.gz')
     testpath = '2013/03/05/20140305_013000_59.fit.gz'
@@ -59,12 +65,14 @@ def test_directory_date_patternFalse():
     assert not s.matches(testpath, d)
 
 
+@deprecated_api
 def test_directory_obs_pattern():
     s = Scraper(format='{{year:2d}}{{month:2d}}{{day:2d}}/{observatory}_{{year:4d}}{{month:2d}}{{day:2d}}.fits', observatory='SDO')
     testpath = '140305/SDO_20140305.fits'
     d = parse_time((2014, 3, 5))
     assert s.matches(testpath, d)
 
+@deprecated_api
 def test_directory_range():
     s = Scraper(format='{{year:4d}}/{{month:2d}}/{{day:2d}}/{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}.fit.gz')
     directory_list = ['2009/12/30/', '2009/12/31/', '2010/01/01/',
@@ -73,6 +81,7 @@ def test_directory_range():
     assert s.range(timerange) == directory_list
 
 
+@deprecated_api
 def test_directory_regex():
     # Test for Windows where '\' is a path separator and not part of the regex
     s = Scraper(format='scheme://a.url.with/a/few/forward/slashes/andbacklash\\inthename.ext')
@@ -81,6 +90,7 @@ def test_directory_regex():
     assert directory == ['scheme://a.url.with/a/few/forward/slashes/']
 
 
+@deprecated_api
 def test_directory_range_false():
     s = Scraper(format='{{year:4d}}{{month:2d}}{{day:2d}}/{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}.fit.gz')
     directory_list = ['20091230/', '20091231/', '20100101/',
@@ -89,6 +99,7 @@ def test_directory_range_false():
     assert s.range(timerange) != directory_list
 
 
+@deprecated_api
 def testNoDateDirectory():
     s = Scraper(format='mySpacecraft/myInstrument/xMinutes/aaa{{year:4d}}{{month_name_abbr:l}}.ext')
     directory_list = ['mySpacecraft/myInstrument/xMinutes/']
@@ -96,12 +107,14 @@ def testNoDateDirectory():
     assert s.range(timerange) == directory_list
 
 
+@deprecated_api
 def test_directory_range_hours():
     s = Scraper(format='{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}/{{hour:2d}}{{minute:2d}}.csv')
     timerange = TimeRange('2009-12-31T23:40:00', '2010-01-01T01:15:00')
     assert len(s.range(timerange)) == 3  # 3 directories (1 per hour)
 
 
+@deprecated_api
 def test_directory_range_single():
     s = Scraper(format='{{year:4d}}{{month:2d}}{{day:2d}}/{{hour:2d}}_{{minute:2d}}.csv')
     startdate = parse_time((2010, 10, 10, 5, 0))
@@ -110,6 +123,7 @@ def test_directory_range_single():
     assert len(s.range(timerange)) == 1
 
 
+@deprecated_api
 def test_directory_range_month():
     s = Scraper(format='{{year:4d}}{{month:2d}}/{{day:2d}}/{{day_of_year:3d}}_{{hour:2d}}.txt')
     startdate = parse_time((2008, 2, 20, 10))
@@ -132,14 +146,15 @@ def test_url_pattern(pattern, filename, metadict):
     assert parse(pattern.format(None), filename).named == metadict
 
 
+@deprecated_api
 def test_url_pattern_milliseconds_zero_padded():
     # Asserts solution to ticket #1954.
     # Milliseconds must be zero-padded in order to match URL lengths.
     now_mock = Mock(return_value=datetime.datetime(2019, 4, 19, 0, 0, 0, 4009))
+    s = Scraper(format='fd_{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}_{{millisecond:3d}}.fts')
     with patch('sunpy.net.scraper.datetime', now=now_mock):
-        s = Scraper(format='fd_{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}_{{millisecond:3d}}.fts')
+        assert s.now == 'fd_20190419_000000_004.fts'
     now_mock.assert_called_once()
-    assert s.now == 'fd_20190419_000000_004.fts'
 
 
 def test_files_range_same_directory_local():
@@ -207,11 +222,10 @@ def test_filelist_relative_hrefs():
     pattern = 'https://www.bbso.njit.edu/pub/archive/{{year:4d}}/{{month:2d}}/{{day:2d}}/bbso_halph_fr_{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}.fts'
     s = Scraper(format=pattern)
     timerange = TimeRange('2016/5/18 15:28:00', '2016/5/18 16:30:00')
-    assert s.domain == 'https://www.bbso.njit.edu/'
     # hrefs are relative to domain here, not to the directory they are present in
     # this checks that `scraper.filelist` returns fileurls relative to the domain
     fileurls = s.filelist(timerange)
-    assert fileurls[1] == s.domain + 'pub/archive/2016/05/18/bbso_halph_fr_20160518_160033.fts'
+    assert fileurls[1] == 'https://www.bbso.njit.edu/pub/archive/2016/05/18/bbso_halph_fr_20160518_160033.fts'
 
 
 @pytest.mark.remote_data
@@ -236,6 +250,7 @@ def test_extract_files_meta():
     assert metalist1[-1]['url'] == urls[-1]
 
 
+@deprecated_api
 def test_no_directory():
     s = Scraper(format='files/{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{month:2d}}.dat')
     startdate = parse_time((2010, 1, 10, 20, 30))
@@ -314,30 +329,29 @@ def test_http_404_error_debug_message(caplog):
 
 
 def test_check_timerange():
-    s = Scraper(format='{{year:4d}}.fits')
-    # Valid time range for 2014.fits is the whole of 2014
-    # Test different cases to make sure check_timerange is working as expected
+    # The time range of a file named for 2014 is the whole of 2014.
+    year = get_timerange_from_exdict({'year': 2014})
 
     # Interval exactly on lower boundary
-    assert s._check_timerange('2014.fits', TimeRange("2013-06-01", "2014-01-01"))
+    assert year.intersects(TimeRange("2013-06-01", "2014-01-01"))
     # Overlaps lower boundary
-    assert s._check_timerange('2014.fits', TimeRange("2013-06-01", "2014-01-02"))
+    assert year.intersects(TimeRange("2013-06-01", "2014-01-02"))
     # Overlaps upper and lower boundary
-    assert s._check_timerange('2014.fits', TimeRange("2013-06-01", "2015-01-02"))
+    assert year.intersects(TimeRange("2013-06-01", "2015-01-02"))
     # Entirely within both boundaries
-    assert s._check_timerange('2014.fits', TimeRange("2014-06-01", "2014-07-02"))
+    assert year.intersects(TimeRange("2014-06-01", "2014-07-02"))
     # Overlaps upper boundary
-    assert s._check_timerange('2014.fits', TimeRange("2014-06-01", "2015-01-02"))
+    assert year.intersects(TimeRange("2014-06-01", "2015-01-02"))
     # Interval exactly on upper boundary
-    assert not s._check_timerange('2014.fits', TimeRange("2015-01-01", "2015-01-02"))
+    assert not year.intersects(TimeRange("2015-01-01", "2015-01-02"))
 
     # Interval below both boundaries
-    assert not s._check_timerange('2014.fits', TimeRange("2002-01-01", "2013-01-02"))
+    assert not year.intersects(TimeRange("2002-01-01", "2013-01-02"))
     # Interval above both boundaries
-    assert not s._check_timerange('2014.fits', TimeRange("2022-01-01", "2025-01-02"))
+    assert not year.intersects(TimeRange("2022-01-01", "2025-01-02"))
 
     # Only 2-digit Year
-    assert s._check_timerange('14.fits', TimeRange("2013-06-01", "2014-01-01"))
+    assert get_timerange_from_exdict({'year': 14}).intersects(TimeRange("2013-06-01", "2014-01-01"))
 
 
 def test_local_expected_directory_doesnt_exist(tmp_path):
@@ -352,6 +366,7 @@ def test_local_expected_directory_doesnt_exist(tmp_path):
     assert len(meta) == 1
 
 
+@deprecated_api
 def test_range_no_directory():
     assert Scraper(format='{{year:4d}}.fits').range(TimeRange('2020-01-01', '2020-01-02')) == ['']
 
@@ -432,3 +447,11 @@ def test_week_number(tmp_path):
         (tmp_path / f'f_2020_{week}.txt').touch()
     s = Scraper(format=tmp_path.as_uri() + '/f_{{year:4d}}_{{week_number:2d}}.txt')
     assert s.filelist(TimeRange('2020-01-07', '2020-01-08')) == [tmp_path.as_uri() + '/f_2020_01.txt']
+
+
+def test_deprecations():
+    s = Scraper(format='https://x.org/{{year:4d}}/f.fits')
+    timerange = TimeRange('2020-01-01', '2020-01-02')
+    for use in (lambda: s.now, lambda: s.domain, lambda: s.range(timerange), lambda: s.matches('', timerange.start)):
+        with pytest.warns(SunpyDeprecationWarning):
+            use()

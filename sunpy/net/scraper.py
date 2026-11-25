@@ -2,18 +2,20 @@
 This module provides a web scraper.
 """
 import re
+import warnings
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import sleep
 from urllib.parse import urlsplit
 
-from dateutil.relativedelta import relativedelta
 from fsspec.core import url_to_fs
 
 from sunpy import log
 from sunpy.extern.parse import compile as compile_pattern
 from sunpy.extern.parse import parse
 from sunpy.net.scraper_utils import date_floor, extract_timestep, get_timerange_from_exdict
+from sunpy.util.decorators import deprecated
+from sunpy.util.exceptions import SunpyDeprecationWarning
 
 __all__ = ['Scraper']
 
@@ -48,7 +50,6 @@ class Scraper:
         extracted encoded as ``parse`` formats, and any other ``kwargs`` parameters
         as a string format, the former represented using double curly-brackets
         to differentiate from the latter.
-        The accepted parse representations for datetime values are as given in ``PARSE_TIME_CONVERSIONS``.
         This can also be a uri to a local file patterns.
     kwargs : `dict`
         A dictionary containing the values to be replaced in the pattern.
@@ -59,9 +60,6 @@ class Scraper:
         The pattern with the parse format.
     datetime_pattern : `str`
         The parse pattern in the datetime format.
-    now : `datetime.datetime`
-        The pattern with the actual date.
-        This is not checking if there is an existent file, but just how the ``pattern`` looks with the current time.
 
     Examples
     --------
@@ -76,12 +74,13 @@ class Scraper:
     >>>
     >>> print(swap.datetime_pattern)
     https://proba2.sidc.be/swap/data/bsd/%Y/%m/%d/swap_lv1_%Y%m%d_%H%M%S.fits
-    >>>
-    >>> print(swap.now)  # doctest: +SKIP
-    https://proba2.sidc.be/swap/data/bsd/2022/12/21/swap_lv1_20221221_112433.fits
 
     Notes
     -----
+    Times are written in the pattern with ``{{year:4d}}``, ``{{year:2d}}``, ``{{month:2d}}``, ``{{month_name:l}}``,
+    ``{{month_name_abbr:l}}``, ``{{day:2d}}``, ``{{day_of_year:3d}}``, ``{{week_number:2d}}``, ``{{hour:2d}}``,
+    ``{{minute:2d}}``, ``{{second:2d}}``, ``{{millisecond:3d}}`` and ``{{microsecond:6d}}``.
+
     The pattern is followed one directory at a time.
     A directory named only with years, months, days or hours is requested for every time in the search range.
     Any other directory is found by listing its parent, so its name can hold anything the pattern can match,
@@ -102,15 +101,29 @@ class Scraper:
         if "year:4d" in pattern and "year:2d" in pattern:
             pattern = pattern.replace("year:2d", ":2d")
         self.pattern = pattern
-        self.domain = f"{urlsplit(self.pattern).scheme}://{urlsplit(self.pattern).netloc}/"
+
+    @property
+    @deprecated(since="8.1", obj_type="property")
+    def domain(self):
+        """
+        The scheme and host of the pattern.
+        """
+        return f"{urlsplit(self.pattern).scheme}://{urlsplit(self.pattern).netloc}/"
+
+    @property
+    @deprecated(since="8.1", obj_type="property")
+    def now(self):
+        """
+        The pattern filled in with the current time.
+        """
         milliseconds = re.search(r'\%e', self.datetime_pattern)
         if not milliseconds:
-            self.now = datetime.now().strftime(self.datetime_pattern)
-        else:
-            now = datetime.now()
-            milliseconds_ = int(now.microsecond / 1000.)
-            self.now = now.strftime(f'{self.datetime_pattern[0:milliseconds.start()]}{milliseconds_:03d}{self.datetime_pattern[milliseconds.end():]}')
+            return datetime.now().strftime(self.datetime_pattern)
+        now = datetime.now()
+        milliseconds_ = int(now.microsecond / 1000.)
+        return now.strftime(f'{self.datetime_pattern[0:milliseconds.start()]}{milliseconds_:03d}{self.datetime_pattern[milliseconds.end():]}')
 
+    @deprecated(since="8.1")
     def matches(self, filepath, date):
         """
         Checks if the given filepath is how the file path is expected
@@ -130,6 +143,7 @@ class Scraper:
         """
         return parse(date.strftime(self.datetime_pattern), filepath) is not None
 
+    @deprecated(since="8.1")
     def range(self, timerange):
         """
         Gets the directories for a certain range of time.
@@ -149,10 +163,12 @@ class Scraper:
         directorypattern = ''
         if '/' in self.datetime_pattern:
             directorypattern = '/'.join(self.datetime_pattern.split('/')[:-1]) + '/'
-        timestep = extract_timestep(directorypattern)
-        if timestep is None:
-            return [directorypattern]
-        else:
+        with warnings.catch_warnings():
+            # The helpers used here are deprecated along with this method.
+            warnings.simplefilter('ignore', SunpyDeprecationWarning)
+            timestep = extract_timestep(directorypattern)
+            if timestep is None:
+                return [directorypattern]
             directories = []
             cur = date_floor(timerange.start, timestep)
             end = date_floor(timerange.end, timestep) + timestep
@@ -281,8 +297,8 @@ class Scraper:
         """
         The names that ``strf`` gives over ``timerange``, in time order.
         """
-        step = relativedelta(hours=1) if '%H' in strf else relativedelta(days=1)
-        current, end = date_floor(timerange.start, step), date_floor(timerange.end, step)
+        floor, step = ('%Y%m%d%H', timedelta(hours=1)) if '%H' in strf else ('%Y%m%d', timedelta(days=1))
+        current, end = (datetime.strptime(time.strftime(floor), floor) for time in (timerange.start, timerange.end))
         names = {}
         while current <= end:
             names[current.strftime(strf)] = None
@@ -319,25 +335,6 @@ class Scraper:
         names = {entry.removeprefix(prefix).removeprefix('./') if entry.startswith(prefix) else entry.rsplit('/', 1)[-1]
                  for entry in entries}
         return sorted(name for name in names if name not in ('', '.', '..') and '/' not in name), None
-
-    def _check_timerange(self, url, timerange):
-        """
-        Checks whether the time range represented in *url* intersects
-        with the given time range.
-
-        Parameters
-        ----------
-        url : `str`
-            URL of the file.
-        timerange : `~sunpy.time.TimeRange`
-            Time interval for which files were searched.
-
-        Returns
-        -------
-        `bool`
-            `True` if URL's valid time range overlaps the given timerange, else `False`.
-        """
-        return get_timerange_from_exdict(parse(self.pattern, url).named).intersects(timerange)
 
     def _extract_files_meta(self, timerange, matcher=None):
         """
