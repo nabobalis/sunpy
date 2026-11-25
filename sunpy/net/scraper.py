@@ -6,7 +6,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from time import sleep
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from fsspec.core import url_to_fs
 
@@ -92,7 +92,8 @@ class Scraper:
 
     def __init__(self, format, **kwargs):
         pattern = format.format(**kwargs)
-        datetime_pattern = pattern
+        # A percent sign that is part of the URL has to be doubled to survive strftime.
+        datetime_pattern = pattern.replace('%', '%%')
         for k, v in PARSE_TIME_CONVERSIONS.items():
             if k in datetime_pattern:
                 datetime_pattern = datetime_pattern.replace(k,v)
@@ -310,7 +311,8 @@ class Scraper:
         """
         The names in ``directory``, and the error if it could not be listed.
         """
-        path = fs._strip_protocol(directory)
+        # Only a web server wants the percent-encoding of a URL kept.
+        path = fs._strip_protocol(directory if directory.startswith('http') else unquote(directory))
         for attempt in range(6):
             try:
                 entries = fs.ls(path, detail=False)

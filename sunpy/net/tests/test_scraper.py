@@ -452,6 +452,15 @@ def test_week_number(tmp_path):
     assert s.filelist(TimeRange('2020-01-07', '2020-01-08')) == [tmp_path.as_uri() + '/f_2020_01.txt']
 
 
+def test_percent_encoded_path(tmp_path):
+    (tmp_path / 'a b' / 'c d 2020').mkdir(parents=True)
+    (tmp_path / 'a b' / 'c d 2020' / 'f_20200101.txt').touch()
+    base = (tmp_path / 'a b').as_uri()
+    s = Scraper(format=base + '/c%20d%20{{year:4d}}/f_{{year:4d}}{{month:2d}}{{day:2d}}.txt')
+    assert s.datetime_pattern.endswith('/a%%20b/c%%20d%%20%Y/f_%Y%m%d.txt')
+    assert s.filelist(TimeRange('2020-01-01', '2020-01-02')) == [base + '/c%20d%202020/f_20200101.txt']
+
+
 def test_deprecations():
     s = Scraper(format='https://x.org/{{year:4d}}/f.fits')
     timerange = TimeRange('2020-01-01', '2020-01-02')
