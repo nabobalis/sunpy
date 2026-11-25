@@ -233,12 +233,12 @@ class SUVIClient(GenericClient):
     """
 
     pattern1b = ('https://data.ngdc.noaa.gov/platforms/solar-space-observing-satellites/goes/'
-                 'goes{SatelliteNumber}/l1b/suvi-l1b-{elem:02}{wave:03}/'
+                 'goes{{SatelliteNumber:2d}}/l1b/suvi-l1b-{{:l}}{{Wavelength:03d}}/'
                  '{{year:4d}}/{{month:2d}}/{{day:2d}}/{{}}_s{{:7d}}{{hour:2d}}{{minute:2d}}{{second:2d}}'
                  '{{:1d}}_e{{:7d}}{{ehour:2d}}{{eminute:2d}}{{esecond:2d}}{{:1d}}_{{}}.fits.gz')
     pattern2 = ('https://data.ngdc.noaa.gov/platforms/solar-space-observing-satellites/'
-                'goes/goes{SatelliteNumber}/l2/data/suvi-l2-ci{wave:03}/{{year:4d}}/'
-                '{{month:2d}}/{{day:2d}}/dr_suvi-l2-ci{{Wavelength:03d}}_g{SatelliteNumber}_s'
+                'goes/goes{{SatelliteNumber:2d}}/l2/data/suvi-l2-ci{{Wavelength:03d}}/{{year:4d}}/'
+                '{{month:2d}}/{{day:2d}}/dr_suvi-l2-ci{{Wavelength:03d}}_g{{SatelliteNumber:2d}}_s'
                 '{{year:4d}}{{month:2d}}{{day:2d}}T{{hour:2d}}{{minute:2d}}{{second:2d}}Z_e'
                 '{{eyear:4d}}{{emonth:2d}}{{eday:2d}}T{{ehour:2d}}{{eminute:2d}}{{esecond:2d}}Z_{{}}.fits')
 
@@ -264,50 +264,26 @@ class SUVIClient(GenericClient):
         return rowdict
 
     def search(self, *args, **kwargs):
-        supported_waves = [94, 131, 171, 195, 284, 304]*u.Angstrom
-        all_waves = []
         matchdict = self._get_match_dict(*args, **kwargs)
-        req_wave = matchdict.get('Wavelength', None)
-        if req_wave is not None:
-            wmin_round = round(req_wave.min.value) * u.Angstrom
-            wmax_round = round(req_wave.max.value) * u.Angstrom
-            req_wave = a.Wavelength(wmin_round, wmax_round)
-            for wave in supported_waves:
-                if wave in req_wave:
-                    all_waves.append(int(wave.value))
-        else:
-            all_waves = [int(i.value) for i in supported_waves]
-        all_satnos = matchdict.get('SatelliteNumber')
-        all_levels = matchdict.get('Level')
+        waves = [94, 131, 171, 195, 284, 304]
+        if (requested := matchdict.get('Wavelength')) is not None:
+            requested = a.Wavelength(round(requested.min.value) * u.Angstrom, round(requested.max.value) * u.Angstrom)
+            waves = [wave for wave in waves if wave * u.Angstrom in requested]
+        matchdict['Wavelength'] = [str(wave) for wave in waves]
+        tr = TimeRange(matchdict['Start Time'], matchdict['End Time'])
         metalist = []
-
-        # iterating over all possible Attr values through loops
-        for satno in all_satnos:
-            for level in all_levels:
-                for wave in all_waves:
-                    formdict = {'wave': wave, 'SatelliteNumber': satno}
-                    if str(level) == '1b':
-                        formdict['elem'] = 'fe'
-                        if wave == 304:
-                            formdict['elem'] = 'he'
-                        pattern = self.pattern1b
-                    elif str(level) == '2':
-                        pattern = self.pattern2
-                    else:
-                        raise ValueError(f"Level {level} is not supported.")
-                    # formatting pattern using Level, SatelliteNumber and Wavelength
-                    urlpattern = pattern.format(**formdict)
-                    urlpattern = urlpattern.replace('{', '{{').replace('}', '}}')
-                    scraper = Scraper(format=urlpattern)
-                    tr = TimeRange(matchdict['Start Time'], matchdict['End Time'])
-                    filesmeta = scraper.extract_files_meta(tr)
-                    for i in filesmeta:
-                        rowdict = self.post_search_hook(i, matchdict)
-                        rowdict['SatelliteNumber'] = satno
-                        rowdict['Level'] = level
-                        rowdict['Wavelength'] = wave*u.Angstrom
-                        metalist.append(rowdict)
-
+        for level in matchdict['Level']:
+            if level not in ('1b', '2'):
+                raise ValueError(f"Level {level} is not supported.")
+            scraper = Scraper(format=self.pattern1b if level == '1b' else self.pattern2)
+            for i in scraper.extract_files_meta(tr, matcher=matchdict):
+                rowdict = self.post_search_hook(i, matchdict)
+                rowdict['SatelliteNumber'] = str(i['SatelliteNumber'])
+                rowdict['Level'] = level
+                rowdict['Wavelength'] = i['Wavelength'] * u.Angstrom
+                metalist.append(rowdict)
+        # Otherwise the satellites and wavelengths are mixed together in time order.
+        metalist.sort(key=lambda row: (row['SatelliteNumber'], row['Level'], row['Wavelength'].value))
         return QueryResponse(metalist, client=self)
 
     @classmethod
