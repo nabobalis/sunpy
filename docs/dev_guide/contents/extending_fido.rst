@@ -44,10 +44,11 @@ Each such client relies on the `~sunpy.net.scraper.Scraper` to be able to query 
 The general algorithm to explain how the `~sunpy.net.scraper.Scraper` is able to do this is:
 A brief explanation of how the Scraper works is as follows:
 
-1. Drop the filename from the pattern and generate a list of directories to search for files.
-2. For each directory, get a list of files present in it.
-3. For each file, check if it matches the pattern.
-4. For each file that matches the pattern, check if it is in the timerange. If it is, add it to the output.
+1. Split the pattern into its directories and the filename.
+2. Follow the directories one at a time to find the ones to search for files.
+3. For each directory, get a list of files present in it.
+4. For each file, check if it matches the pattern.
+5. For each file that matches the pattern, check if it is in the timerange. If it is, add it to the output.
 
 For a more verbose in-depth explanation on how this is accomplished internally:
 
@@ -63,34 +64,24 @@ Upon initialization, a version of the pattern following the datetime format is a
     >>> s.datetime_pattern
     'https://proba2.sidc.be/swap/data/bsd/%Y/%m/%d/swap_lv1_%Y%m%d_%H%M%S.fits'
 
-The smallest unit of time / time-step for that directory-pattern (the full ``datetime_pattern`` except the filename at the end) is then internally detected from ``datetime_pattern`` by using :meth:`~sunpy.net.scraper_utils.extract_timestep`.
+A directory named only with years, months, days or hours is filled in from ``datetime_pattern`` for every time between the start and the end of the timerange.
+For the pattern above and a timerange from ``2015-01-01T00:08:00`` to ``2015-01-03T00:00:00``, these are the directories ``2015/01/01/``, ``2015/01/02/`` and ``2015/01/03/``.
+A directory that does not exist on the server is skipped.
 
-.. code-block:: python
+A directory named with anything else cannot be filled in this way, for example one that holds minutes and seconds or the value of an attr.
+Instead the directory above it is listed, and the names in it that match the pattern and can overlap the timerange are followed.
+This means that a pattern can extract attrs from its directories as well as from the filename.
 
-    >>> from sunpy.net.scraper_utils import extract_timestep
-    >>> extract_timestep(s.datetime_pattern)
-    relativedelta(seconds=+1)
+The directories are listed with `fsspec <https://filesystem-spec.readthedocs.io/en/latest/>`__, so a pattern can be any URL it can read, such as ``https://``, ``ftp://`` or ``file://``.
 
-After that `~sunpy.net.scraper.Scraper.range` is called on the pattern where for each time between start and stop, in increments of timestep, the time is first "floored" according to the pattern via :meth:`~sunpy.net.scraper_utils.date_floor` and a corresponding directory-pattern is generated.
+Each filename is then parsed against the remaining portion of the pattern to determine if it matches.
+Each such file is then checked for lying in the intended timerange using :meth:`sunpy.net.scraper_utils.get_timerange_from_exdict` to get the covered timerange for each file.
+Files that meet these criteria are added to the output.
 
 .. code-block:: python
 
     >>> from sunpy.time import TimeRange
     >>> timerange = TimeRange('2015-01-01T00:08:00','2015-01-03T00:00:00')
-    >>> s.range(timerange)
-    ['https://proba2.sidc.be/swap/data/bsd/2015/01/01/',
-    'https://proba2.sidc.be/swap/data/bsd/2015/01/02/',
-    'https://proba2.sidc.be/swap/data/bsd/2015/01/03/']
-
-These locations, provided by the filled pattern, are visited and a list of files at each location is obtained.
-This is handled differently depending on whether the pattern is a web URL or a ``file://`` or an ``ftp://`` path in the :meth:`~sunpy.net.scraper.Scraper.filelist` method.
-
-Each filename is then parsed against the remaining portion of the pattern to determine if it matches.
-Each such file is then checked for lying in the intended timerange using the :meth:`~sunpy.net.scraper._check_timerange` method which in turn uses :meth:`sunpy.net.scraper_utils.get_timerange_from_exdict` to get the covered timerange for each file.
-Files that meet these criteria are added to the output.
-
-.. code-block:: python
-
     >>> s.filelist(timerange) # doctest: +REMOTE_DATA
     ['https://proba2.sidc.be/swap/data/bsd/2015/01/01/swap_lv1_20150101_000857.fits',
     'https://proba2.sidc.be/swap/data/bsd/2015/01/01/swap_lv1_20150101_001027.fits',
@@ -143,9 +134,9 @@ This is done addressed with the two following methods:
 
 A good example of the use of these two methods is the `sunpy.net.dataretriever.sources.norh.NoRHClient` in sunpy.
 
-It may also be possible that the ``baseurl`` property needs to be customized based on attrs other than Time.
-Since `~sunpy.net.scraper.Scraper` doesn't currently support generating directories that have non-time variables, the :meth:`~sunpy.net.dataretriever.client.GenericClient.search` needs to be customized.
-The search method should in this case, generate a ``baseurl`` dependent on the values of these attrs, and then call ``super().search`` or `~sunpy.net.scraper.Scraper` for each ``baseurl`` generated.
+Attrs other than Time can also be part of the directories in ``pattern``, written in the same way as in the filename, for example ``level{{Level}}/{{year:4d}}/``.
+Only the directories whose values match the query are searched.
+If the URLs can not be described by a single ``pattern``, the :meth:`~sunpy.net.dataretriever.client.GenericClient.search` needs to be customized to use a `~sunpy.net.scraper.Scraper` for each pattern.
 For an example of a complex modification of the ``search()`` method see the implementation of `.SUVIClient.search`.
 
 Customizing the Downloader

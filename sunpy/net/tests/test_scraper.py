@@ -1,16 +1,48 @@
 import datetime
-import io
 import logging
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock, patch
-from urllib.error import HTTPError, URLError
 
 import pytest
+from aiohttp import ClientResponseError
 
 from sunpy.data.test import rootdir
 from sunpy.extern import parse
 from sunpy.net.scraper import Scraper
 from sunpy.net.scraper_utils import get_timerange_from_exdict
 from sunpy.time import TimeRange, parse_time
+
+
+@pytest.fixture
+def archive(tmp_path):
+    """
+    A function that fills an archive with empty files, the URL the archive is served at and the paths requested.
+    """
+    requested = []
+
+    class Handler(SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def log_request(self, *args):
+            requested.append(self.path)
+
+    def fill(*files):
+        for file in files:
+            (tmp_path / file).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / file).touch()
+
+    with ThreadingHTTPServer(('127.0.0.1', 0), partial(Handler, directory=tmp_path)) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        yield fill, f'http://127.0.0.1:{server.server_port}/', requested
+        server.shutdown()
+
+
+def fake_fs(ls):
+    fs = Mock(async_impl=False, _strip_protocol=lambda url: url, ls=Mock(side_effect=ls))
+    return patch('sunpy.net.scraper.url_to_fs', return_value=(fs, None)), fs
 
 
 def test_directory_date_pattern():
@@ -191,7 +223,8 @@ def test_extract_files_meta():
     metalist0 = s0._extract_files_meta(timerange0, matcher=matchdict)
     assert metalist0[0]['wave'] == 'tca'
     assert metalist0[3]['wave'] == 'tcz'
-    assert metalist0[1]['day'] == 2
+    # Files come back in time order, so both wavelengths of the first day come first.
+    assert metalist0[2]['day'] == 2
 
     pattern1 = ('https://gong2.nso.edu/oQR/zqs/{{year:4d}}{{month:2d}}/mrzqs{{year:2d}}{{month:2d}}{{day:2d}}'
                 '/mrzqs{{year:2d}}{{month:2d}}{{day:2d}}t{{hour:2d}}{{minute:2d}}c{{CAR_ROT:4d}}_{{:3d}}.fits.gz')
@@ -244,6 +277,9 @@ def test_yearly_overlap():
     assert len(scraper.filelist(trange)) == 1
 
 
+LYRA = "https://proba2.sidc.be/lyra/data/bsd/{{year:4d}}/{{month:2d}}/{{day:2d}}/{{}}_lev{{Level:1d}}_std.fits"
+
+
 @pytest.mark.parametrize(
     ("error_code", "expected_number_calls", "error_message"),
     [
@@ -255,46 +291,26 @@ def test_yearly_overlap():
     ],
 )
 def test_http_errors_with_enqueue_limit(error_code, expected_number_calls, error_message):
-    with patch("sunpy.net.scraper.urlopen") as mocked_urlopen:
-        http_error = HTTPError(
-           "https://example.com", error_code, error_message, {}, None
-        )
-        mocked_urlopen.side_effect = http_error
-        time_range = TimeRange("2012/3/4", "2012/3/4 02:00")
-        pattern = "https://proba2.sidc.be/lyra/data/bsd/{{year:4d}}/{{month:2d}}/{{day:2d}}/{{}}_lev{{Level:1d}}_std.fits"
-        scraper = Scraper(format=pattern)
-        with pytest.raises(HTTPError, match=error_message) as excinfo:
-            scraper._httpfilelist(time_range)
-        assert excinfo.value.code == error_code
-        assert mocked_urlopen.call_count == expected_number_calls
-        http_error.close()
+    error = ClientResponseError(Mock(), (), status=error_code, message=error_message, headers={'Retry-After': '0'})
+    patched, fs = fake_fs(error)
+    with patched, pytest.raises(ClientResponseError, match=error_message) as excinfo:
+        Scraper(format=LYRA).filelist(TimeRange("2012/3/4", "2012/3/4 02:00"))
+    assert excinfo.value.status == error_code
+    assert fs.ls.call_count == expected_number_calls
 
 
 def test_connection_error():
-    with patch('sunpy.net.scraper.urlopen') as mocked_urlopen:
-        mocked_urlopen.side_effect = URLError('connection error')
-        time = TimeRange('2012/3/4', '2012/3/4 02:00')
-        pattern = "https://proba2.sidc.be/lyra/data/bsd/{{year:4d}}/{{month:2d}}/{{day:2d}}/{{}}_lev{{Level:1d}}_std.fits"
-        scraper = Scraper(format=pattern)
-        with pytest.raises(URLError, match='connection error'):
-            scraper._httpfilelist(time)
+    patched, _ = fake_fs(OSError('connection error'))
+    with patched, pytest.raises(OSError, match='connection error'):
+        Scraper(format=LYRA).filelist(TimeRange('2012/3/4', '2012/3/4 02:00'))
 
 
 @pytest.mark.thread_unsafe(reason="changing log level is not thread safe")
 def test_http_404_error_debug_message(caplog):
-    with caplog.at_level(logging.DEBUG, logger='sunpy'):
-        def patch_range(self, range):
-            return ['https://test.com/']
-        with patch('sunpy.net.scraper.urlopen') as mocked_urlopen:
-            with patch.object(Scraper, 'range', patch_range):
-                http_error = HTTPError('https://example.com', 404, '', {}, None)
-                mocked_urlopen.side_effect = http_error
-                time = TimeRange('2012/3/4', '2012/3/4 02:00')
-                pattern = "https://proba2.sidc.be/lyra/data/bsd/{{year:4d}}/{{month:2d}}/{{day:2d}}/{{}}_lev{{Level:1d}}_std.fits"
-                scraper = Scraper(format=pattern)
-                scraper._httpfilelist(time)
-                assert "Directory https://test.com/ not found." in caplog.text
-                http_error.close()
+    patched, _ = fake_fs(FileNotFoundError)
+    with caplog.at_level(logging.DEBUG, logger='sunpy'), patched:
+        assert Scraper(format=LYRA).filelist(TimeRange('2012/3/4', '2012/3/4 02:00')) == []
+    assert "Directory https://proba2.sidc.be/lyra/data/bsd/2012/03/04/ not found." in caplog.text
 
 
 def test_check_timerange():
@@ -345,18 +361,70 @@ def test_filelist_unknown_scheme():
         Scraper(format='nonsense://x.org/{{year:4d}}/f.fits').filelist(TimeRange('2020-01-01', '2020-01-02'))
 
 
-@pytest.mark.parametrize('href', ['f_01.fits', './f_01.fits', '/d/2020/f_01.fits', 'https://x.org/d/2020/f_01.fits'])
-def test_filelist_link_forms(href):
-    s = Scraper(format='https://x.org/d/{{year:4d}}/f_{{month:2d}}.fits')
-    with patch('sunpy.net.scraper.urlopen', return_value=io.BytesIO(f'<a href="{href}"></a><a href=""></a>'.encode())):
-        assert s.filelist(TimeRange('2020-01-01', '2020-01-31')) == ['https://x.org/d/2020/f_01.fits']
+def test_search_errors():
+    def ls(path, detail):
+        if path.endswith('/05/'):
+            raise OSError('connection error')
+        return [path + 'lyra_20120304-000000_lev2_std.fits']
+
+    patched, _ = fake_fs(ls)
+    with patched:
+        files, errors = Scraper(format=LYRA)._search(TimeRange('2012/3/4', '2012/3/5'))
+    assert [file['day'] for file in files] == [4]
+    assert [str(error) for error in errors] == ['connection error']
 
 
-def test_filelist_day_of_year():
-    s = Scraper(format='https://x.org/{{year:4d}}/f_{{year:4d}}{{day_of_year:3d}}.fits')
-    listing = ''.join(f'<a href="f_2020{day:03d}.fits"></a>' for day in (1, 100, 300)).encode()
-    with patch('sunpy.net.scraper.urlopen', return_value=io.BytesIO(listing)):
-        assert s.filelist(TimeRange('2020-04-09', '2020-04-09 12:00')) == ['https://x.org/2020/f_2020100.fits']
+def test_list_names():
+    entries = ['https://x.org/d/f.fits', 'https://x.org/d/./g.fits', 'https://x.org/d/sub/', 'https://x.org/d/sub/h.fits',
+               'https://x.org/d/./', 'https://x.org/d/?C=N;O=D']
+    _, fs = fake_fs(lambda path, detail: entries)
+    assert Scraper._list(fs, 'https://x.org/d/') == (['?C=N;O=D', 'f.fits', 'g.fits', 'sub'], None)
+
+
+def test_http_listing(archive):
+    fill, url, requested = archive
+    fill('2020/01/01/f_20200101_0000.fits', '2020/01/01/f_20200101_1200.fits', '2020/01/01/notes.txt',
+         '2020/01/03/f_20200103_0000.fits')
+    s = Scraper(format=url + '{{year:4d}}/{{month:2d}}/{{day:2d}}/f_{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}.fits')
+    files = s.filelist(TimeRange('2020-01-01 06:00', '2020-01-03'))
+    assert files == [url + '2020/01/01/f_20200101_1200.fits', url + '2020/01/03/f_20200103_0000.fits']
+    assert sorted(requested) == ['/2020/01/01/', '/2020/01/02/', '/2020/01/03/']
+
+
+def test_hourly_directories(archive):
+    fill, url, requested = archive
+    fill('2020/01/01/H0300/f_0315.fits')
+    s = Scraper(format=url + '{{year:4d}}/{{month:2d}}/{{day:2d}}/H{{hour:2d}}00/f_{{hour:2d}}{{minute:2d}}.fits')
+    assert s.filelist(TimeRange('2020-01-01 02:00', '2020-01-01 04:30')) == [url + '2020/01/01/H0300/f_0315.fits']
+    assert sorted(requested) == ['/2020/01/01/H0200/', '/2020/01/01/H0300/', '/2020/01/01/H0400/']
+
+
+def test_fine_directories(archive):
+    fill, url, requested = archive
+    fill('2020/01/01/20200101_025004/a.fits', '2020/01/01/20200101_025004/b.fits', '2020/01/01/20200101_061504/a.fits',
+         '2020/01/02/20200102_010000/a.fits')
+    s = Scraper(format=url + '{{year:4d}}/{{month:2d}}/{{day:2d}}/'
+                '{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}/{{name}}.fits')
+    meta = s._extract_files_meta(TimeRange('2020-01-01', '2020-01-01 12:00'))
+    assert [(m['hour'], m['name']) for m in meta] == [(2, 'a'), (2, 'b'), (6, 'a')]
+    # One listing for the day and one for each scan found in it, not one for every second.
+    assert len(requested) == 3
+
+
+def test_directory_field(archive):
+    fill, url, requested = archive
+    fill('level0/2020/f_20200101.fits', 'level1/2020/f_20200101.fits', 'level1hao/2020/f_20200101.fits')
+    s = Scraper(format=url + 'level{{Level}}/{{year:4d}}/f_{{year:4d}}{{month:2d}}{{day:2d}}.fits')
+    meta = s._extract_files_meta(TimeRange('2020-01-01', '2020-01-02'), matcher={'Level': ['1']})
+    assert meta == [{'Level': '1', 'year': 2020, 'month': 1, 'day': 1, 'url': url + 'level1/2020/f_20200101.fits'}]
+    assert sorted(requested) == ['/', '/level1/2020/']
+
+
+def test_filelist_day_of_year(archive):
+    fill, url, _ = archive
+    fill('2020/f_2020001.fits', '2020/f_2020100.fits', '2020/f_2020300.fits')
+    s = Scraper(format=url + '{{year:4d}}/f_{{year:4d}}{{day_of_year:3d}}.fits')
+    assert s.filelist(TimeRange('2020-04-09', '2020-04-09 12:00')) == [url + '2020/f_2020100.fits']
 
 
 def test_week_number(tmp_path):

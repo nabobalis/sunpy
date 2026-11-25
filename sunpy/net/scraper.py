@@ -1,23 +1,26 @@
 """
 This module provides a web scraper.
 """
-import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from ftplib import FTP
 from time import sleep
-from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit
-from urllib.request import urlopen
+from urllib.parse import urlsplit
 
-from bs4 import BeautifulSoup
+from dateutil.relativedelta import relativedelta
+from fsspec.core import url_to_fs
 
 from sunpy import log
+from sunpy.extern.parse import compile as compile_pattern
 from sunpy.extern.parse import parse
 from sunpy.net.scraper_utils import date_floor, extract_timestep, get_timerange_from_exdict
 
 __all__ = ['Scraper']
 
+# So that proxies set in the environment are used.
+_HTTP_OPTIONS = {'client_kwargs': {'trust_env': True}}
+# Time codes finer than an hour, which give too many directory names to guess.
+_FINE = re.compile('%[MSef]')
 
 # "parse" expressions to convert into datetime format
 PARSE_TIME_CONVERSIONS = {
@@ -76,7 +79,18 @@ class Scraper:
     >>>
     >>> print(swap.now)  # doctest: +SKIP
     https://proba2.sidc.be/swap/data/bsd/2022/12/21/swap_lv1_20221221_112433.fits
+
+    Notes
+    -----
+    The pattern is followed one directory at a time.
+    A directory named only with years, months, days or hours is requested for every time in the search range.
+    Any other directory is found by listing its parent, so its name can hold anything the pattern can match,
+    such as a finer time or a value that is not a time at all.
+    Archives are read with `fsspec <https://filesystem-spec.readthedocs.io/en/latest/>`__, so any URL scheme it supports can be searched.
     """
+    #: How many directories are listed at once, for archives served over HTTP.
+    max_conn = 5
+
     def __init__(self, format, **kwargs):
         pattern = format.format(**kwargs)
         datetime_pattern = pattern
@@ -186,129 +200,125 @@ class Scraper:
         ['https://proba2.sidc.be/lyra/data/bsd/2023/03/06/lyra_20230306-000000_lev2_std.fits',
         'https://proba2.sidc.be/lyra/data/bsd/2023/03/06/lyra_20230306-000000_lev3_std.fits']
         """
-        directories = self.range(timerange)
-        if urlsplit(directories[0]).scheme == "ftp":
-            return self._ftpfilelist(timerange)
-        elif urlsplit(directories[0]).scheme == "file":
-            return self._localfilelist(timerange)
-        elif urlsplit(directories[0]).scheme in ["http", "https"]:
-            return self._httpfilelist(timerange)
-        else:
-            raise ValueError("The provided pattern should either be an FTP or a local file-path, or an HTTP address.")
+        return [meta['url'] for meta in self._extract_files_meta(timerange)]
 
-    def _ftpfilelist(self, timerange):
+    def _search(self, timerange, matcher=None):
         """
-        Goes over archives available over ftp to return list of files in the given timerange.
+        Finds the files that match the pattern within ``timerange``.
+
+        Parameters
+        ----------
+        timerange : `~sunpy.time.TimeRange`
+            Time interval to search.
+        matcher : `dict`, optional
+            The allowed values of fields in the pattern.
+
+        Returns
+        -------
+        `list` of `dict`, `list` of `Exception`
+            The metadata of each file found, and the errors from directories that could not be listed.
         """
-        directories = self.range(timerange)
-        filesurls = list()
-        ftpurl = urlsplit(directories[0]).netloc
-        with FTP(ftpurl, user="anonymous", passwd="data@sunpy.org") as ftp:
-            for directory in directories:
-                try:
-                    ftp.cwd(urlsplit(directory).path)
-                except Exception as e:
-                    log.debug(f"FTP CWD: {e}")
+        if not urlsplit(self.pattern).scheme:
+            raise ValueError("The pattern must be a URL, such as one starting with https://, ftp:// or file://.")
+        segments, strfs = self.pattern.split('/'), self.datetime_pattern.split('/')
+        first = next((i for i, segment in enumerate(segments) if '{' in segment), len(segments) - 1)
+        base = '/'.join(segments[:first]) + '/'
+        fs, _ = url_to_fs(base, **(_HTTP_OPTIONS if base.startswith('http') else {}))
+        nodes, errors = [(base, {})], []
+        # Only a filesystem built for it can list several directories at once.
+        with ThreadPoolExecutor(self.max_conn if fs.async_impl else 1) as pool:
+            for segment, strf in zip(segments[first:-1], strfs[first:-1]):
+                if '{' not in segment:
+                    nodes = [(url + segment + '/', fields) for url, fields in nodes]
+                elif '{' in strf or _FINE.search(strf):
+                    nodes = self._descend(pool, fs, nodes, segment, timerange, matcher, errors)
+                else:
+                    names = self._candidates(strf, timerange)
+                    nodes = self._keep(nodes, [names] * len(nodes), segment, timerange, matcher)
+            nodes = self._descend(pool, fs, nodes, segments[-1], timerange, matcher, errors, last=True)
+        return [{**fields, 'url': url} for url, fields in nodes], errors
+
+    def _descend(self, pool, fs, nodes, segment, timerange, matcher, errors, last=False):
+        """
+        Lists every directory in ``nodes`` and keeps the names that match ``segment``.
+        """
+        listed = list(pool.map(lambda node: self._list(fs, node[0]), nodes))
+        errors += [error for _, error in listed if error is not None]
+        return self._keep(nodes, [names for names, _ in listed], segment, timerange, matcher, last)
+
+    @staticmethod
+    def _keep(nodes, names, segment, timerange, matcher, last=False):
+        """
+        Extends each of ``nodes`` with those of its ``names`` that can still lead to a wanted file.
+        """
+        parser = compile_pattern(segment)
+        kept = []
+        for (url, seen), found in zip(nodes, names):
+            for name in found:
+                match = parser.parse(name)
+                # A field that is repeated in the pattern has to keep its value.
+                if match is None or any(seen.get(key, value) != value for key, value in match.named.items()):
                     continue
-                for file_i in ftp.nlst():
-                    fullpath = directory + file_i
-                    if self._url_follows_pattern(fullpath):
-                        if self._check_timerange(fullpath, timerange):
-                            filesurls.append(fullpath)
+                if matcher and any(matcher.get(key) and str(value) not in matcher[key]
+                                   for key, value in match.named.items()):
+                    continue
+                fields = {**seen, **match.named}
+                start = None
+                # A directory can only be ruled out by its time once the year is known.
+                if last or 'year' in fields:
+                    found_range = get_timerange_from_exdict(fields)
+                    if not found_range.intersects(timerange):
+                        continue
+                    start = found_range.start.datetime
+                kept.append((start, (url + name + ('' if last else '/'), fields)))
+        if last:
+            # Files come back in time order, and in name order within the same time.
+            kept.sort(key=lambda item: item[0])
+        return [node for _, node in kept]
 
-        filesurls = ['ftp://' + f"{urlsplit(url).netloc}{urlsplit(url).path}"
-                     for url in filesurls]
-
-        return filesurls
-
-    def _localfilelist(self, timerange):
+    @staticmethod
+    def _candidates(strf, timerange):
         """
-        Goes over locally stored archives to return list of files in the given timerange.
+        The names that ``strf`` gives over ``timerange``, in time order.
         """
-        pattern, datetime_pattern = self.pattern, self.datetime_pattern
-        if os.name == 'nt':
-            pattern_temp, datetime_pattern_temp = (pattern.replace('file:///', ''),
-                                                   datetime_pattern.replace('file:///',''))
-            pattern_temp = pattern_temp.replace('\\', '/')
-            datetime_pattern_temp = datetime_pattern_temp.replace('\\', '/')
-            prefix = 'file:///'
-        else:
-            pattern_temp, datetime_pattern_temp = (pattern.replace('file://', ''),
-                                                   datetime_pattern.replace('file://',''))
-            prefix = 'file://'
-        # Change pattern variables class-wide
-        self.pattern, self.datetime_pattern = pattern_temp, datetime_pattern_temp
-        directories = self.range(timerange)
-        filepaths = list()
-        for directory in directories:
+        step = relativedelta(hours=1) if '%H' in strf else relativedelta(days=1)
+        current, end = date_floor(timerange.start, step), date_floor(timerange.end, step)
+        names = {}
+        while current <= end:
+            names[current.strftime(strf)] = None
+            current += step
+        return list(names)
+
+    @staticmethod
+    def _list(fs, directory):
+        """
+        The names in ``directory``, and the error if it could not be listed.
+        """
+        path = fs._strip_protocol(directory)
+        for attempt in range(6):
             try:
-                for file_i in os.listdir(directory):
-                    fullpath = directory + file_i
-                    if self._url_follows_pattern(fullpath):
-                        if self._check_timerange(fullpath, timerange):
-                            filepaths.append(fullpath)
+                entries = fs.ls(path, detail=False)
+                break
             except FileNotFoundError:
-                log.debug(f"Local directory not found: {directory}.")
-        filepaths = [prefix + path for path in filepaths]
-        # Set them back to their original values
-        self.pattern, self.datetime_pattern = pattern, datetime_pattern
-        return filepaths
-
-    def _httpfilelist(self, timerange):
-        """
-        Goes over http archives hosted on the web, to return list of files in the given timerange.
-        """
-        directories = self.range(timerange)
-        filesurls = list()
-        retry_counts = {}
-        while directories:
-            directory = directories.pop(0)
-            try:
-                opn = urlopen(directory, timeout=60)
-                try:
-                    soup = BeautifulSoup(opn, "html.parser")
-                    for link in soup.find_all("a"):
-                        href = link.get("href")
-                        if href is not None:
-                            fullpath = urljoin(directory, href)
-                            if self._url_follows_pattern(fullpath):
-                                if self._check_timerange(fullpath, timerange):
-                                    filesurls.append(fullpath)
-                finally:
-                    opn.close()
-            except HTTPError as http_err:
                 # Ignore missing directories (issue #2684).
-                if http_err.code == 404:
-                    log.debug(f"Directory {directory} not found.")
-                    continue
-                if http_err.code not in [429, 504]:
-                    log.debug(f"Got error {http_err.code} while scraping {directory} : {http_err.reason}")
-                    raise
-                # See if the server has told us how long to back off for
-                retry_after = http_err.hdrs.get('Retry-After', 2)
+                log.debug(f"Directory {directory} not found.")
+                return [], None
+            except Exception as error:
+                # A busy server answers with one of these and can be asked again.
+                if getattr(error, 'status', None) not in (429, 504) or attempt == 5:
+                    log.debug(f"Failed to list {directory}: {error}")
+                    return [], error
                 try:
-                    # Ensure that we can parse the header as an int in sec
-                    retry_after = int(retry_after)
-                except Exception as e:
-                    log.debug(f"Converting retry_after failed: {e}")
+                    retry_after = int(error.headers['Retry-After'])
+                except Exception:
                     retry_after = 2
-                log.debug(
-                    f"Got {http_err.code} while scraping {directory}, waiting for {retry_after} seconds before retrying."
-                )
+                log.debug(f"Got {error.status} while listing {directory}, waiting {retry_after} seconds to retry.")
                 sleep(retry_after)
-                if retry_counts.get(directory, 0) > 4:
-                    log.debug(f"Exceeded maximum retry limit for {directory}")
-                    raise
-                retry_counts[directory] = retry_counts.get(directory, 0) + 1
-                directories.insert(0, directory)
-                continue
-            except URLError as url_err:
-                log.debug(f"Failed to parse content from {directory}: {url_err}")
-                raise
-            except Exception as e:
-                log.debug(f"Failed to parse: {e}")
-                raise
-        return filesurls
+        prefix = path.rstrip('/') + '/'
+        entries = [entry.rstrip('/') for entry in entries]
+        names = {entry.removeprefix(prefix).removeprefix('./') if entry.startswith(prefix) else entry.rsplit('/', 1)[-1]
+                 for entry in entries}
+        return sorted(name for name in names if name not in ('', '.', '..') and '/' not in name), None
 
     def _check_timerange(self, url, timerange):
         """
@@ -329,12 +339,6 @@ class Scraper:
         """
         return get_timerange_from_exdict(parse(self.pattern, url).named).intersects(timerange)
 
-    def _url_follows_pattern(self, url):
-        """
-        Check whether the url provided follows the pattern.
-        """
-        return parse(self.pattern, url)
-
     def _extract_files_meta(self, timerange, matcher=None):
         """
         Returns metadata information contained in URLs.
@@ -352,25 +356,7 @@ class Scraper:
         `list` of `dict`
             List of metadata info for all URLs.
         """
-        urls = self.filelist(timerange)
-        metalist = []
-        for url in urls:
-            metadict = parse(self.pattern, url)
-            if metadict is not None:
-                append = True
-                metadict = metadict.named
-                metadict['url'] = url
-                if 'month' not in metadict:
-                    if 'month_name' in metadict:
-                        metadict['month'] = datetime.strptime(metadict['month_name'], '%B').month
-                    elif 'month_name_abbr' in metadict:
-                        metadict['month'] = datetime.strptime(metadict['month_name_abbr'], '%b').month
-                if matcher is not None:
-                    for k in metadict:
-                        if match := matcher.get(k):
-                            if str(metadict[k]) not in match:
-                                append = False
-                                break
-                if append:
-                    metalist.append(metadict)
-        return metalist
+        files, errors = self._search(timerange, matcher)
+        if errors:
+            raise errors[0]
+        return files

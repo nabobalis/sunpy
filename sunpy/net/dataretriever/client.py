@@ -237,14 +237,14 @@ class GenericClient(BaseClient):
             raise ValueError("``baseurl`` is no longer supported, the whole URL goes in ``pattern``.")
         scraper = Scraper(format=pattern)
         tr = TimeRange(matchdict['Start Time'], matchdict['End Time'])
-        filesmeta = scraper._extract_files_meta(tr, matcher=matchdict)
+        filesmeta, errors = scraper._search(tr, matcher=matchdict)
         filesmeta = sorted(filesmeta, key=lambda k: k['url'])
         metalist = []
         for i in filesmeta:
             rowdict = self.post_search_hook(i, matchdict)
             if rowdict:
                 metalist.append(rowdict)
-        return QueryResponse(metalist, client=self)
+        return QueryResponse(metalist, client=self, errors=errors)
 
     def fetch(self, qres, path=None, overwrite=False,
               progress=True, downloader=None, wait=True, **kwargs):

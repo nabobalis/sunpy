@@ -39,3 +39,11 @@ def test_baseurl_is_rejected():
     with mock.patch.object(LYRAClient, 'baseurl', 'https://example.com/'):
         with pytest.raises(ValueError, match='baseurl'):
             LYRAClient().search(a.Time('2025/1/1', '2025/1/2'), a.Instrument.lyra)
+
+
+def test_search_errors():
+    fs = mock.Mock(async_impl=False, _strip_protocol=lambda url: url, ls=mock.Mock(side_effect=OSError('archive is down')))
+    with mock.patch('sunpy.net.scraper.url_to_fs', return_value=(fs, None)):
+        qr = LYRAClient().search(a.Time('2025/1/1', '2025/1/1 12:00'), a.Instrument.lyra)
+    assert len(qr) == 0
+    assert [str(error) for error in qr.errors] == ['archive is down']
