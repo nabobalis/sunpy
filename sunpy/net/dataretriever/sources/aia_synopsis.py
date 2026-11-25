@@ -4,9 +4,6 @@ import astropy.units as u
 
 from sunpy.net import attrs as a
 from sunpy.net.dataretriever import GenericClient
-from sunpy.net.dataretriever.client import QueryResponse
-from sunpy.net.scraper import Scraper
-from sunpy.time import TimeRange
 
 __all__ = ["AIASynopsisClient"]
 
@@ -62,43 +59,23 @@ class AIASynopsisClient(GenericClient):
     def info_url(self):
         return "https://jsoc1.stanford.edu/data/aia/synoptic/"
 
-    def search(self, *args, **kwargs):
-        """
-        Query this client for a list of results.
-
-        Parameters
-        ----------
-        \\*args: `tuple`
-            `sunpy.net.attrs` objects representing the query.
-        \\*\\*kwargs: `dict`
-            Any extra keywords to refine the search.
-
-        Returns
-        -------
-        A `QueryResponse` instance containing the query result.
-        """
-        # TODO: There has to be a better way than repeating the entire search method.
-        _, pattern, matchdict = self.pre_search_hook(*args, **kwargs)
+    @classmethod
+    def pre_search_hook(cls, *args, **kwargs):
+        baseurl, pattern, matchdict = super().pre_search_hook(*args, **kwargs)
         if "Wavelength" in matchdict:
-            # The scarper uses string matching, so we have to convert the wavelength to a string
-            # and remove the trailing zeros to match the pattern on the server.
-            matchdict["Wavelength"] = str(np.round(matchdict["Wavelength"].min.to_value(u.AA, u.equivalencies.spectral()))).replace(".0","")
-        scraper = Scraper(format=pattern)
-        tr = TimeRange(matchdict['Start Time'], matchdict['End Time'])
-        filesmeta = scraper._extract_files_meta(tr, matcher=matchdict)
-        filesmeta = sorted(filesmeta, key=lambda k: k['url'])
-        metalist = []
-        if filesmeta:
-            base_time = self.post_search_hook(filesmeta[0], matchdict)['Start Time']
-            for i in filesmeta:
-                rowdict = self.post_search_hook(i, matchdict)
-                # Have to manually deal with sample rate if is it provided
-                if sample_rate := matchdict.get("Sample"):
-                    sample_rate = u.Quantity(sample_rate[0], u.s)
-                    if (rowdict['Start Time'] - base_time).to(u.second) % sample_rate != 0 * u.s:
-                        continue
-                metalist.append(rowdict)
-        return QueryResponse(metalist, client=self)
+            # The scraper matches strings, so the wavelength has to be written as it is in the filenames.
+            wavelength = matchdict["Wavelength"].min.to_value(u.AA, u.equivalencies.spectral())
+            matchdict["Wavelength"] = str(np.round(wavelength)).replace(".0", "")
+        return baseurl, pattern, matchdict
+
+    def search(self, *args, **kwargs):
+        response = super().search(*args, **kwargs)
+        sample = [arg.value for arg in args if isinstance(arg, a.Sample)]
+        if sample and len(response):
+            # The sample rate has to be applied here, counting from the first file found.
+            elapsed = (response['Start Time'] - response['Start Time'][0]).to_value(u.s)
+            response = response[elapsed % sample[0] == 0]
+        return response
 
     @classmethod
     def register_values(cls):
