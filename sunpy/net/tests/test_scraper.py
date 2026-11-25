@@ -1,4 +1,5 @@
 import datetime
+import io
 import logging
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
@@ -248,6 +249,7 @@ def test_yearly_overlap():
     [
         (400, 1, "Bad Request"),
         (403, 1, "Forbidden"),
+        (500, 1, "Internal Server Error"),
         (429, 6, "Too Many Requests"),
         (504, 6, "Gateway Timeout"),
     ],
@@ -332,3 +334,26 @@ def test_local_expected_directory_doesnt_exist(tmp_path):
     meta = s._extract_files_meta(TimeRange("2025-01-01", "2025-01-02"))
     assert len(files) == 1
     assert len(meta) == 1
+
+
+def test_range_no_directory():
+    assert Scraper(format='{{year:4d}}.fits').range(TimeRange('2020-01-01', '2020-01-02')) == ['']
+
+
+def test_filelist_unknown_scheme():
+    with pytest.raises(ValueError, match='nonsense|pattern'):
+        Scraper(format='nonsense://x.org/{{year:4d}}/f.fits').filelist(TimeRange('2020-01-01', '2020-01-02'))
+
+
+@pytest.mark.parametrize('href', ['f_01.fits', './f_01.fits', '/d/2020/f_01.fits', 'https://x.org/d/2020/f_01.fits'])
+def test_filelist_link_forms(href):
+    s = Scraper(format='https://x.org/d/{{year:4d}}/f_{{month:2d}}.fits')
+    with patch('sunpy.net.scraper.urlopen', return_value=io.BytesIO(f'<a href="{href}"></a><a href=""></a>'.encode())):
+        assert s.filelist(TimeRange('2020-01-01', '2020-01-31')) == ['https://x.org/d/2020/f_01.fits']
+
+
+def test_filelist_day_of_year():
+    s = Scraper(format='https://x.org/{{year:4d}}/f_{{year:4d}}{{day_of_year:3d}}.fits')
+    listing = ''.join(f'<a href="f_2020{day:03d}.fits"></a>' for day in (1, 100, 300)).encode()
+    with patch('sunpy.net.scraper.urlopen', return_value=io.BytesIO(listing)):
+        assert s.filelist(TimeRange('2020-04-09', '2020-04-09 12:00')) == ['https://x.org/2020/f_2020100.fits']

@@ -7,12 +7,10 @@ from datetime import datetime
 from ftplib import FTP
 from time import sleep
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 from urllib.request import urlopen
 
 from bs4 import BeautifulSoup
-
-from astropy.time import Time
 
 from sunpy import log
 from sunpy.extern.parse import parse
@@ -21,15 +19,6 @@ from sunpy.net.scraper_utils import date_floor, extract_timestep, get_timerange_
 __all__ = ['Scraper']
 
 
-# Regular expressions to convert datetime format
-TIME_CONVERSIONS = {
-    '%Y': r'\d{4}', '%y': r'\d{2}',
-    '%b': '[A-Z][a-z]{2}', '%B': r'\W', '%m': r'\d{2}',
-    '%d': r'\d{2}', '%j': r'\d{3}',
-    '%H': r'\d{2}', '%I': r'\d{2}',
-    '%M': r'\d{2}',
-    '%S': r'\d{2}', '%e': r'\d{3}', '%f': r'\d{6}'
-}
 # "parse" expressions to convert into datetime format
 PARSE_TIME_CONVERSIONS = {
     "{year:4d}": "%Y", "{year:2d}": "%y",
@@ -57,10 +46,9 @@ class Scraper:
         as a string format, the former represented using double curly-brackets
         to differentiate from the latter.
         The accepted parse representations for datetime values are as given in ``PARSE_TIME_CONVERSIONS``.
-        This can also be a uri to a local file patterns. Default is `None`.
+        This can also be a uri to a local file patterns.
     kwargs : `dict`
         A dictionary containing the values to be replaced in the pattern.
-        Will be ignored if ``regex`` is `True`.
 
     Attributes
     ----------
@@ -77,14 +65,14 @@ class Scraper:
     >>> from sunpy.net import Scraper
     >>>
     >>> pattern = ('https://proba2.sidc.be/{instrument}/data/bsd/{{year:4d}}/{{month:2d}}/{{day:2d}}/'
-    ...            '{instrument}_lv1_{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{month:2d}}{{second:2d}}.fits')
+    ...            '{instrument}_lv1_{{year:4d}}{{month:2d}}{{day:2d}}_{{hour:2d}}{{minute:2d}}{{second:2d}}.fits')
     >>> swap = Scraper(format=pattern, instrument='swap')
     >>>
     >>> print(swap.pattern)
-    https://proba2.sidc.be/swap/data/bsd/{year:4d}/{month:2d}/{day:2d}/swap_lv1_{year:4d}{month:2d}{day:2d}_{hour:2d}{month:2d}{second:2d}.fits
+    https://proba2.sidc.be/swap/data/bsd/{year:4d}/{month:2d}/{day:2d}/swap_lv1_{year:4d}{month:2d}{day:2d}_{hour:2d}{minute:2d}{second:2d}.fits
     >>>
     >>> print(swap.datetime_pattern)
-    https://proba2.sidc.be/swap/data/bsd/%Y/%m/%d/swap_lv1_%Y%m%d_%H%m%S.fits
+    https://proba2.sidc.be/swap/data/bsd/%Y/%m/%d/swap_lv1_%Y%m%d_%H%M%S.fits
     >>>
     >>> print(swap.now)  # doctest: +SKIP
     https://proba2.sidc.be/swap/data/bsd/2022/12/21/swap_lv1_20221221_112433.fits
@@ -144,6 +132,7 @@ class Scraper:
             Notice that these directories may not exist in the archive.
         """
         # find directory structure - without file names
+        directorypattern = ''
         if '/' in self.datetime_pattern:
             directorypattern = '/'.join(self.datetime_pattern.split('/')[:-1]) + '/'
         timestep = extract_timestep(directorypattern)
@@ -193,19 +182,9 @@ class Scraper:
         >>> pattern = 'https://proba2.sidc.be/lyra/data/bsd/{{year:4d}}/{{month:2d}}/{{day:2d}}/{{}}_lev{{Level:1d}}_std.fits'
         >>> lyra = Scraper(pattern)
         >>> timerange = TimeRange('2023-03-06T00:00:00','2023-03-06T00:10:00')
-        >>> print(swap.filelist(timerange)) # doctest: +REMOTE_DATA
-        ['https://proba2.sidc.be/swap/data/bsd/2023/03/06/swap_lv1_20230306_000128.fits',
-        'https://proba2.sidc.be/swap/data/bsd/2023/03/06/swap_lv1_20230306_000318.fits',
-        'https://proba2.sidc.be/swap/data/bsd/2023/03/06/swap_lv1_20230306_000508.fits',
-        'https://proba2.sidc.be/swap/data/bsd/2023/03/06/swap_lv1_20230306_000658.fits',
-        'https://proba2.sidc.be/swap/data/bsd/2023/03/06/swap_lv1_20230306_000848.fits']
-
-        Notes
-        -----
-        The search is strict with the time range, so if the archive scraped contains daily files,
-        but the range doesn't start from the beginning of the day, then the file for that day
-        won't be selected. The end of the timerange will normally be OK as includes the file
-        on such end time.
+        >>> print(lyra.filelist(timerange)) # doctest: +REMOTE_DATA
+        ['https://proba2.sidc.be/lyra/data/bsd/2023/03/06/lyra_20230306-000000_lev2_std.fits',
+        'https://proba2.sidc.be/lyra/data/bsd/2023/03/06/lyra_20230306-000000_lev3_std.fits']
         """
         directories = self.range(timerange)
         if urlsplit(directories[0]).scheme == "ftp":
@@ -215,7 +194,7 @@ class Scraper:
         elif urlsplit(directories[0]).scheme in ["http", "https"]:
             return self._httpfilelist(timerange)
         else:
-            return ValueError("The provided pattern should either be an FTP or a local file-path, or an HTTP address.")
+            raise ValueError("The provided pattern should either be an FTP or a local file-path, or an HTTP address.")
 
     def _ftpfilelist(self, timerange):
         """
@@ -285,16 +264,13 @@ class Scraper:
         while directories:
             directory = directories.pop(0)
             try:
-                opn = urlopen(directory)
+                opn = urlopen(directory, timeout=60)
                 try:
                     soup = BeautifulSoup(opn, "html.parser")
                     for link in soup.find_all("a"):
                         href = link.get("href")
                         if href is not None:
-                            if href[0] == '/':
-                                fullpath = self.domain + href[1:]
-                            else:
-                                fullpath = directory + href
+                            fullpath = urljoin(directory, href)
                             if self._url_follows_pattern(fullpath):
                                 if self._check_timerange(fullpath, timerange):
                                     filesurls.append(fullpath)
@@ -305,28 +281,27 @@ class Scraper:
                 if http_err.code == 404:
                     log.debug(f"Directory {directory} not found.")
                     continue
-                if http_err.code in [400, 403]:
+                if http_err.code not in [429, 504]:
                     log.debug(f"Got error {http_err.code} while scraping {directory} : {http_err.reason}")
                     raise
-                if http_err.code in [429, 504]:
-                    # See if the server has told us how long to back off for
-                    retry_after = http_err.hdrs.get('Retry-After', 2)
-                    try:
-                        # Ensure that we can parse the header as an int in sec
-                        retry_after = int(retry_after)
-                    except Exception as e:
-                        log.debug(f"Converting retry_after failed: {e}")
-                        retry_after = 2
-                    log.debug(
-                        f"Got {http_err.code} while scraping {directory}, waiting for {retry_after} seconds before retrying."
-                    )
-                    sleep(retry_after)
-                    if retry_counts.get(directory, 0) > 4:
-                        log.debug(f"Exceeded maximum retry limit for {directory}")
-                        raise
-                    retry_counts[directory] = retry_counts.get(directory, 0) + 1
-                    directories.insert(0, directory)
-                    continue
+                # See if the server has told us how long to back off for
+                retry_after = http_err.hdrs.get('Retry-After', 2)
+                try:
+                    # Ensure that we can parse the header as an int in sec
+                    retry_after = int(retry_after)
+                except Exception as e:
+                    log.debug(f"Converting retry_after failed: {e}")
+                    retry_after = 2
+                log.debug(
+                    f"Got {http_err.code} while scraping {directory}, waiting for {retry_after} seconds before retrying."
+                )
+                sleep(retry_after)
+                if retry_counts.get(directory, 0) > 4:
+                    log.debug(f"Exceeded maximum retry limit for {directory}")
+                    raise
+                retry_counts[directory] = retry_counts.get(directory, 0) + 1
+                directories.insert(0, directory)
+                continue
             except URLError as url_err:
                 log.debug(f"Failed to parse content from {directory}: {url_err}")
                 raise
@@ -352,84 +327,13 @@ class Scraper:
         `bool`
             `True` if URL's valid time range overlaps the given timerange, else `False`.
         """
-        exdict = parse(self.pattern, url).named
-        if exdict['year'] < 100:
-            exdict['year'] = 2000 + exdict['year']
-        if 'month' not in exdict:
-            if 'month_name' in exdict:
-                exdict['month'] = datetime.strptime(exdict['month_name'], '%B').month
-            elif 'month_name_abbr' in exdict:
-                exdict['month'] = datetime.strptime(exdict['month_name_abbr'], '%b').month
-        tr = get_timerange_from_exdict(exdict)
-        return tr.intersects(timerange)
+        return get_timerange_from_exdict(parse(self.pattern, url).named).intersects(timerange)
 
     def _url_follows_pattern(self, url):
         """
         Check whether the url provided follows the pattern.
         """
         return parse(self.pattern, url)
-
-
-    def _extract_date(self, url):
-        """
-        Extracts the date from a particular url following the pattern.
-        """
-        # Remove the user and password if present
-        url = url.replace("anonymous:data@sunpy.org@", "")
-
-        def url_to_list(txt):
-            # Substitutes '.' and '_' for '/'.
-            return re.sub(r'\.|_', '/', txt).split('/')
-
-        # Create a list of all the blocks in times
-        # assuming they are all separated with either '.', '_' or '/'
-        pattern_list = url_to_list(self.pattern)
-        url_list = url_to_list(url)
-        time_order = [
-            '%Y', '%y', '%b', '%B', '%m', '%d', '%j',
-            '%H', '%I', '%M', '%S', '%e', '%f'
-        ]
-        final_date = []
-        final_pattern = []
-        # Find in directory and filename
-        for pattern_elem, url_elem in zip(pattern_list, url_list):
-            time_formats = [x for x in time_order if x in pattern_elem]
-            if len(time_formats) > 0:
-                # Find whether there's text that should not be here
-                toremove = re.split('%.', pattern_elem)
-                if len(toremove) > 0:
-                    for bit in toremove:
-                        if bit != '':
-                            url_elem = url_elem.replace(bit, '', 1)
-                            pattern_elem = pattern_elem.replace(bit, '', 1)
-                final_date.append(url_elem)
-                final_pattern.append(pattern_elem)
-                for time_bit in time_formats:
-                    time_order.remove(time_bit)
-        # Find and remove repeated elements eg: %Y in ['%Y', '%Y%m%d']
-        # Make all as single strings
-        date_together = ''.join(final_date)
-        pattern_together = ''.join(final_pattern)
-        re_together = pattern_together
-        for k, v in TIME_CONVERSIONS.items():
-            re_together = re_together.replace(k, v)
-        # Lists to contain the unique elements of the date and the pattern
-        final_date = list()
-        final_pattern = list()
-        re_together = re_together.replace('[A-Z]', '\\[A-Z]')
-        for p, r in zip(pattern_together.split('%')[1:], re_together.split('\\')[1:]):
-            if p == 'e':
-                continue
-            regexp = fr'\{r}' if not r.startswith('[') else r
-            pattern = f'%{p}'
-            date_part = re.search(regexp, date_together)
-            date_together = date_together[:date_part.start()] \
-                + date_together[date_part.end():]
-            if pattern not in final_pattern:
-                final_pattern.append(f'%{p}')
-                final_date.append(date_part.group())
-        return Time.strptime(' '.join(final_date),
-                             ' '.join(final_pattern))
 
     def _extract_files_meta(self, timerange, matcher=None):
         """

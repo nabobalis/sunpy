@@ -232,11 +232,12 @@ class GenericClient(BaseClient):
         -------
         A `QueryResponse` instance containing the query result.
         """
-        # baseurl added for backwards compatibility purposes only
         baseurl, pattern, matchdict = self.pre_search_hook(*args, **kwargs)
-        scraper = Scraper(pattern=baseurl) if baseurl else Scraper(format=pattern)
+        if baseurl:
+            raise ValueError("``baseurl`` is no longer supported, the whole URL goes in ``pattern``.")
+        scraper = Scraper(format=pattern)
         tr = TimeRange(matchdict['Start Time'], matchdict['End Time'])
-        filesmeta = scraper._extract_files_meta(tr, extractor=pattern) if baseurl else scraper._extract_files_meta(tr, matcher=matchdict)
+        filesmeta = scraper._extract_files_meta(tr, matcher=matchdict)
         filesmeta = sorted(filesmeta, key=lambda k: k['url'])
         metalist = []
         for i in filesmeta:

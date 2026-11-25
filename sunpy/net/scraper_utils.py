@@ -101,6 +101,17 @@ def get_timerange_from_exdict(exdict):
     # This function deliberately does NOT use astropy.time because it is not
     # needed, and the performance overheads in dealing with astropy.time.Time
     # objects are large
+    exdict = dict(exdict)
+    year = int(exdict.get('year', 100))
+    if year < 100:
+        # The same pivot as strptime's %y
+        exdict['year'] = year + (1900 if year >= 69 else 2000)
+    for name, code in (('month_name', '%B'), ('month_name_abbr', '%b')):
+        if name in exdict:
+            exdict.setdefault('month', datetime.strptime(exdict[name], code).month)
+    if 'day_of_year' in exdict:
+        date = datetime(int(exdict.get('year', 1)), 1, 1) + timedelta(days=int(exdict['day_of_year']) - 1)
+        exdict['month'], exdict['day'] = date.month, date.day
     datetypes = ['year', 'month', 'day']
     timetypes = ['hour', 'minute', 'second', 'millisecond']
     dtlist = [int(exdict.get(d, 1)) for d in datetypes]

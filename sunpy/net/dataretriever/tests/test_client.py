@@ -1,3 +1,9 @@
+from unittest import mock
+
+import pytest
+
+from sunpy.net import attrs as a
+from sunpy.net.dataretriever import LYRAClient
 from sunpy.net.dataretriever.client import QueryResponse
 from sunpy.time import parse_time
 
@@ -27,3 +33,9 @@ def test_missing_time_range():
     resp = QueryResponse(rows)
 
     assert resp.time_range() is None
+
+
+def test_baseurl_is_rejected():
+    with mock.patch.object(LYRAClient, 'baseurl', 'https://example.com/'):
+        with pytest.raises(ValueError, match='baseurl'):
+            LYRAClient().search(a.Time('2025/1/1', '2025/1/2'), a.Instrument.lyra)
